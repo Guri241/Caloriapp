@@ -1,0 +1,20 @@
+{
+  "name": "caloriapp",
+  "private": true,
+  "packageManager": "pnpm@10.34.3",
+  "scripts": {
+    "dev:api": "pnpm --filter @caloriapp/api dev",
+    "dev:mobile": "pnpm --filter @caloriapp/mobile start",
+    "build:api": "pnpm --filter @caloriapp/api build"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}

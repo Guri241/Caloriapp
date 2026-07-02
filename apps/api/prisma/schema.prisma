@@ -1,0 +1,259 @@
+// ==========================================
+// ダイエットアプリ Prismaスキーマ
+// DB: Neon PostgreSQL
+// ==========================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ------------------------------------------
+// Enum定義
+// ------------------------------------------
+
+// 活動レベル（消費カロリー計算の基礎係数に利用）
+enum ActivityLevel {
+  SEDENTARY // 座り仕事中心・運動なし
+  LIGHT // 軽い運動（週1-3回）
+  MODERATE // 中程度の運動（週3-5回）
+  ACTIVE // 高強度の運動（週6-7回）
+  VERY_ACTIVE // 激しい運動・肉体労働
+}
+
+// 食事区分
+enum MealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+}
+
+// ヘルスケア連携元
+enum HealthSource {
+  APPLE_HEALTH
+  GOOGLE_FIT
+}
+
+// ヘルスケアデータ種別
+enum HealthDataType {
+  STEPS // 歩数
+  ACTIVE_CALORIES // 活動消費カロリー
+  WEIGHT // 体重（ヘルスケア側で記録されたもの）
+}
+
+// ------------------------------------------
+// User: ユーザープロフィール
+// ------------------------------------------
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  passwordHash  String // 簡易JWT認証用のハッシュ
+  name          String?
+  birthDate     DateTime?
+  gender        String? // 'male' | 'female' | 'other' などフリー文字列で保持
+  heightCm      Float? // 身長（BMI計算等に使用）
+  activityLevel ActivityLevel @default(MODERATE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  weightLogs     WeightLog[]
+  mealLogs       MealLog[]
+  exerciseLogs   ExerciseLog[]
+  goals          Goal[]
+  healthLogs     HealthLog[]
+  dailySummaries DailySummary[]
+  foods          Food[] // ユーザーが自前登録した食品マスタ
+
+  @@map("users")
+}
+
+// ------------------------------------------
+// WeightLog: 体重・体脂肪記録
+// ------------------------------------------
+model WeightLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  weightKg   Float
+  bodyFatPct Float? // 体脂肪率（%）
+  recordedAt DateTime // 記録日時（体重計の測定時刻）
+  source     String   @default("manual") // 'manual' | 'apple_health' | 'google_fit'
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, recordedAt])
+  @@map("weight_logs")
+}
+
+// ------------------------------------------
+// Food: 食品マスタ
+// 外部DB（文科省食品成分DB/USDA）取込分とユーザー自前登録分を共存させる
+// ------------------------------------------
+model Food {
+  id     String  @id @default(cuid())
+  userId String? // nullなら共通マスタ（外部DB取込分）、値ありならユーザー自前登録
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name         String
+  brand        String? // メーカー名・商品名（任意）
+  caloriesKcal Float // 100gあたりのカロリー
+  proteinG     Float // 100gあたりのたんぱく質(g)
+  fatG         Float // 100gあたりの脂質(g)
+  carbsG       Float // 100gあたりの炭水化物(g)
+  servingSizeG Float?  @default(100) // 基準量（g）。100g基準以外の登録も可能にする
+
+  externalSource String? // 'mext' | 'usda' | null（自前登録）
+  externalId     String? // 外部DB側のID（重複取込防止用）
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mealLogItems MealLogItem[]
+
+  @@index([name])
+  @@unique([externalSource, externalId])
+  @@map("foods")
+}
+
+// ------------------------------------------
+// MealLog: 食事記録（1回の食事＝1レコード）
+// 実際の食品明細はMealLogItemに分離（1食で複数品目を記録できるように）
+// ------------------------------------------
+model MealLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  mealType MealType
+  loggedAt DateTime // 食事をとった日時
+  memo     String?
+
+  createdAt DateTime @default(now())
+
+  items MealLogItem[]
+
+  @@index([userId, loggedAt])
+  @@map("meal_logs")
+}
+
+// ------------------------------------------
+// MealLogItem: 食事の品目明細
+// Foodマスタ参照 or 手入力（foodIdがnullの場合は手入力扱い）
+// ------------------------------------------
+model MealLogItem {
+  id        String  @id @default(cuid())
+  mealLogId String
+  mealLog   MealLog @relation(fields: [mealLogId], references: [id], onDelete: Cascade)
+
+  foodId String?
+  food   Food?   @relation(fields: [foodId], references: [id])
+
+  // 手入力時に使用（foodIdがnullの場合は必須）
+  customName String?
+  amountG    Float // 実際に食べた量（g）
+
+  // 計算済みの実摂取値（Food参照時はamountGとFoodの100gあたり値から自動計算してここに保存）
+  caloriesKcal Float
+  proteinG     Float
+  fatG         Float
+  carbsG       Float
+
+  createdAt DateTime @default(now())
+
+  @@map("meal_log_items")
+}
+
+// ------------------------------------------
+// ExerciseLog: 運動記録
+// ------------------------------------------
+model ExerciseLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  exerciseName    String // 例: 'ランニング', '筋トレ'
+  durationMinutes Int?
+  caloriesBurned  Float
+  performedAt     DateTime
+  source          String   @default("manual") // 'manual' | 'apple_health' | 'google_fit'
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, performedAt])
+  @@map("exercise_logs")
+}
+
+// ------------------------------------------
+// Goal: 目標設定
+// ------------------------------------------
+model Goal {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  targetWeightKg Float
+  startWeightKg  Float // 目標設定時点の体重（進捗率計算の基準）
+  startDate      DateTime
+  targetDate     DateTime?
+  isActive       Boolean   @default(true) // 現在有効な目標かどうか（複数目標の履歴を残せるように）
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isActive])
+  @@map("goals")
+}
+
+// ------------------------------------------
+// HealthLog: HealthKit/Google Fit同期データ
+// ------------------------------------------
+model HealthLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  source     HealthSource
+  dataType   HealthDataType
+  value      Float // 歩数なら歩数、カロリーならkcal、体重ならkg
+  recordedAt DateTime // ヘルスケア側の記録日時
+  syncedAt   DateTime       @default(now()) // アプリに同期された日時
+
+  // 同一データの重複同期を防ぐための一意制約
+  @@unique([userId, source, dataType, recordedAt])
+  @@index([userId, recordedAt])
+  @@map("health_logs")
+}
+
+// ------------------------------------------
+// DailySummary: 日次集計キャッシュ
+// 毎日バッチ or 記録更新時に再計算して保存する想定
+// ------------------------------------------
+model DailySummary {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date DateTime // 集計対象日（時刻部分は00:00に正規化して保存）
+
+  totalIntakeKcal Float @default(0) // 摂取カロリー合計
+  totalBurnedKcal Float @default(0) // 消費カロリー合計（運動＋ヘルスケア活動消費）
+  netCaloriesKcal Float @default(0) // 摂取 - 消費
+  totalProteinG   Float @default(0)
+  totalFatG       Float @default(0)
+  totalCarbsG     Float @default(0)
+
+  latestWeightKg Float? // その日時点の最新体重（あれば）
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@map("daily_summaries")
+}
