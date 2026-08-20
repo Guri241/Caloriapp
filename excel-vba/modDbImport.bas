@@ -1,0 +1,748 @@
+Attribute VB_Name = "modDbImport"
+Option Explicit
+
+'==================================================================
+' modDbImport  -  DB(ADO) → 生産実績シート 取り込みマクロ
+'
+'  シート想定レイアウト（添付レイアウトと同じ形）
+'    A1 : 年 (例 2026年)      B1 : 月 (例 7月)
+'    A列 : 「8020 昼」のようなブロック見出し（先頭が設備番号）
+'          その下に「稼働時間」「良品数(個)」…などの項目名
+'    B列〜AF列 : 1日〜31日 のデータ欄
+'
+'  実行手順
+'    ① CONN_STR / TABLE_NAME を自環境に合わせる
+'    ② FLD_DATE / FLD_LINE / FLD_SHIFT にDBのキー列名を入れる
+'    ③ BuildFieldMap に「シートの項目名 → DBの列名」を登録する
+'    ④ 必要なら BuildShiftMap / BuildLineMap で値の読み替えを登録する
+'    ⑤ ImportFromDb を実行
+'
+'  ※ ADO は遅延バインディング(CreateObject)のため参照設定は不要です。
+'==================================================================
+
+'--- ADO 定数（参照設定なしで使うためのローカル定義） ---------------
+Private Const adCmdText          As Long = 1
+Private Const adParamInput       As Long = 1
+Private Const adDate             As Long = 7
+Private Const adDBTimeStamp      As Long = 135
+
+
+'================== ① 接続・SQL 設定 ==================
+
+' 接続文字列（下は SQL Server の例。使うDBに合わせて書き換えてください）
+'   SQL Server : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;User ID=UID;Password=PWD;"
+'   SQL Server(認証統合) : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;Integrated Security=SSPI;"
+'   Access     : "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\path\data.accdb;"
+'   Oracle     : "Provider=OraOLEDB.Oracle;Data Source=TNS;User Id=UID;Password=PWD;"
+'   ODBC全般   : "Provider=MSDASQL;DSN=DSN_NAME;UID=UID;PWD=PWD;"
+Private Const CONN_STR As String = _
+    "Provider=SQLOLEDB;Data Source=SERVER_NAME;Initial Catalog=DB_NAME;User ID=USER_ID;Password=PASSWORD;"
+
+' 取得元テーブル（またはビュー）名
+Private Const TABLE_NAME As String = "dbo.生産実績"
+
+' 識別子の引用符（SQL Server / Access = [ ]  Oracle / PostgreSQL = " "  MySQL = ` `  不要なら空文字）
+Private Const QUOTE_OPEN  As String = "["
+Private Const QUOTE_CLOSE As String = "]"
+
+' SQLを自分で書きたい場合はここに記述（空なら TABLE_NAME から自動生成）
+'   日付範囲の条件は「>= ?」「< ?」の2つの ? を必ずこの順で入れてください。
+'   例: "SELECT 日付, 設備番号, 直区分, 稼働時間, 良品数 FROM V_生産実績 WHERE 日付 >= ? AND 日付 < ?"
+Private Const SQL_OVERRIDE As String = ""
+
+' True  : パラメータ(?)で日付を渡す（推奨）
+' False : SQL文に日付リテラルを埋め込む（? が使えないプロバイダ向け）
+Private Const USE_PARAMETERS As Boolean = True
+
+' USE_PARAMETERS = False のときの日付リテラル書式
+'   SQL Server / MySQL / PostgreSQL : "'yyyy-mm-dd'"
+'   Access                          : "\#yyyy/mm/dd\#"
+'   Oracle                          : "TO_DATE('yyyy-mm-dd','YYYY-MM-DD')"
+Private Const DATE_LITERAL_FMT As String = "'yyyy-mm-dd'"
+
+' 日付パラメータの型。エラーになる場合は adDBTimeStamp に変更してください。
+Private Const DATE_PARAM_TYPE As Long = adDate
+
+' クエリのタイムアウト（秒）
+Private Const CMD_TIMEOUT As Long = 120
+
+
+'================== ② DBのキー列名 ==================
+
+Private Const FLD_DATE  As String = "日付"       ' 日付（1日単位）
+Private Const FLD_LINE  As String = "設備番号"   ' 8020 / 8021 / 8022 …
+Private Const FLD_SHIFT As String = "直区分"     ' 昼 / 夜 / スライダ / テレスコ昼 …
+
+' 直区分がDBに無い（設備番号だけで一意）の場合は、下を "" にしてください。
+' その場合シート側の見出しの「昼/夜」等は無視して設備番号だけで突き合わせます。
+'   例: Private Const FLD_SHIFT As String = ""
+
+
+'================== ③ 項目名 → DB列名 の対応 ==================
+' 左 : シートA列の項目名（表記ゆれは自動で吸収。全角/半角・空白は無視されます）
+' 右 : DBの列名
+Private Sub BuildFieldMap(ByVal m As Object)
+    AddMap m, "稼働時間", "稼働時間"
+    AddMap m, "良品数(個)", "良品数"
+    AddMap m, "TT生産数", "TT生産数"
+    AddMap m, "825B/TNGA生産数", "TNGA生産数"
+    AddMap m, "基準人数(最小人数)", "基準人数"
+
+    ' 「変動値」「直接時間」はシート側の計算式のため、既定では取り込みません。
+    ' DBから取得する場合は下のコメントを外してください。
+    ' AddMap m, "変動値", "変動値"
+    ' AddMap m, "直接時間", "直接時間"
+End Sub
+
+
+'================== ④ 値の読み替え（必要な場合だけ） ==================
+
+' シート見出しの区分表記 → DBの直区分の値
+' 例) シート「昼」 に対して DB が "1" なら  AddMap m, "昼", "1"
+Private Sub BuildShiftMap(ByVal m As Object)
+    ' AddMap m, "昼", "1"
+    ' AddMap m, "夜", "2"
+    ' AddMap m, "スライダ", "SLD"
+    ' AddMap m, "テレスコ昼", "TEL1"
+    ' AddMap m, "テレスコ夜", "TEL2"
+End Sub
+
+' シート見出しの設備番号 → DBの設備番号の値
+' 例) シート「8020」 に対して DB が "L8020" なら  AddMap m, "8020", "L8020"
+Private Sub BuildLineMap(ByVal m As Object)
+    ' AddMap m, "8020", "L8020"
+End Sub
+
+
+'================== ⑤ シートのレイアウト設定 ==================
+
+Private Const SHEET_NAME     As String = ""    ' 空ならアクティブシート
+Private Const YEAR_CELL      As String = "A1"  ' 年
+Private Const MONTH_CELL     As String = "B1"  ' 月
+Private Const FIRST_DATA_COL As Long = 2       ' B列 = 1日
+Private Const LAST_DATA_COL  As Long = 32      ' AF列 = 31日
+Private Const SCAN_START_ROW As Long = 2       ' 見出し探索の開始行（1行目は年月なので除外）
+Private Const SCAN_END_ROW   As Long = 0       ' 0 = A列の最終行まで
+
+Private Const SKIP_FORMULA_CELLS     As Boolean = True   ' 数式セルは上書きしない
+Private Const WRITE_ZERO_WHEN_MISSING As Boolean = False ' DBに該当日が無いとき0を書く
+Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄をクリアする
+
+' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
+Private Const AGGREGATE_MODE As String = "LAST"
+
+
+'==================================================================
+'  ここから下は通常編集不要
+'==================================================================
+
+'------------------------------------------------------------------
+' メイン : DBから取り込む
+'------------------------------------------------------------------
+Public Sub ImportFromDb()
+    Dim ws As Worksheet
+    Dim fieldMap As Object, shiftMap As Object, lineMap As Object
+    Dim blocks As Collection, unknownLabels As Collection
+    Dim cache As Object
+    Dim yy As Long, mm As Long
+    Dim dFrom As Date, dTo As Date
+    Dim recCount As Long, writeCount As Long, skipFormula As Long, missCount As Long
+    Dim calcMode As XlCalculation
+    Dim restored As Boolean
+
+    On Error GoTo ErrHandler
+
+    Set ws = GetTargetSheet()
+
+    yy = ReadYear(ws.Range(YEAR_CELL))
+    mm = ReadMonth(ws.Range(MONTH_CELL))
+    If yy < 1900 Or yy > 2999 Then
+        Err.Raise vbObjectError + 1, , "年セル(" & YEAR_CELL & ")から年を読み取れませんでした。"
+    End If
+    If mm < 1 Or mm > 12 Then
+        Err.Raise vbObjectError + 2, , "月セル(" & MONTH_CELL & ")から月を読み取れませんでした。"
+    End If
+    dFrom = DateSerial(yy, mm, 1)
+    dTo = DateSerial(yy, mm + 1, 1)
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    Set shiftMap = NewDict(): BuildShiftMap shiftMap
+    Set lineMap = NewDict(): BuildLineMap lineMap
+    If fieldMap.Count = 0 Then
+        Err.Raise vbObjectError + 3, , "BuildFieldMap に項目が登録されていません。"
+    End If
+
+    Set unknownLabels = New Collection
+    Set blocks = ScanLayout(ws, fieldMap, unknownLabels)
+    If blocks.Count = 0 Then
+        Err.Raise vbObjectError + 4, , "A列にブロック見出し（例: 8020 昼）が見つかりませんでした。" & vbCrLf & _
+                                        "SCAN_START_ROW / シート指定をご確認ください。"
+    End If
+
+    Set cache = FetchData(dFrom, dTo, fieldMap, recCount)
+
+    Application.ScreenUpdating = False
+    calcMode = Application.Calculation
+    Application.Calculation = xlCalculationManual
+
+    If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks
+
+    WriteBlocks ws, blocks, cache, shiftMap, lineMap, writeCount, skipFormula, missCount
+
+    Application.Calculation = calcMode
+    Application.ScreenUpdating = True
+    restored = True
+
+    MsgBox BuildReport(yy, mm, blocks, recCount, writeCount, skipFormula, missCount, unknownLabels), _
+           vbInformation, "DB取り込み完了"
+    Exit Sub
+
+ErrHandler:
+    If Not restored Then
+        On Error Resume Next
+        Application.Calculation = xlCalculationAutomatic
+        Application.ScreenUpdating = True
+        On Error GoTo 0
+    End If
+    MsgBox "取り込みに失敗しました。" & vbCrLf & vbCrLf & _
+           "エラー " & Err.Number & " : " & Err.Description, vbCritical, "DB取り込み"
+End Sub
+
+'------------------------------------------------------------------
+' 接続テスト（設定確認用）
+'------------------------------------------------------------------
+Public Sub TestConnection()
+    Dim cn As Object
+    On Error GoTo ErrHandler
+    Set cn = CreateObject("ADODB.Connection")
+    cn.Open CONN_STR
+    cn.Close
+    MsgBox "接続に成功しました。", vbInformation, "接続テスト"
+    Exit Sub
+ErrHandler:
+    MsgBox "接続に失敗しました。" & vbCrLf & vbCrLf & _
+           "エラー " & Err.Number & " : " & Err.Description, vbCritical, "接続テスト"
+End Sub
+
+'------------------------------------------------------------------
+' 実行されるSQLを確認する
+'------------------------------------------------------------------
+Public Sub ShowGeneratedSql()
+    Dim fieldMap As Object, sql As String
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    sql = BuildSql(fieldMap)
+    If Not USE_PARAMETERS Then
+        sql = InlineDates(sql, DateSerial(2026, 7, 1), DateSerial(2026, 8, 1))
+    End If
+    MsgBox sql, vbInformation, "生成されるSQL"
+End Sub
+
+'------------------------------------------------------------------
+' 取り込み対象欄のクリア（数式セルは残す）
+'------------------------------------------------------------------
+Public Sub ClearImportArea()
+    Dim ws As Worksheet, fieldMap As Object, blocks As Collection, dummy As Collection
+    On Error GoTo ErrHandler
+
+    Set ws = GetTargetSheet()
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    Set dummy = New Collection
+    Set blocks = ScanLayout(ws, fieldMap, dummy)
+    If blocks.Count = 0 Then
+        MsgBox "対象ブロックが見つかりませんでした。", vbExclamation
+        Exit Sub
+    End If
+    If MsgBox(blocks.Count & " ブロックのデータ欄をクリアします。よろしいですか？", _
+              vbQuestion + vbYesNo, "クリア") <> vbYes Then Exit Sub
+
+    Application.ScreenUpdating = False
+    ClearBlocks ws, blocks
+    Application.ScreenUpdating = True
+    MsgBox "クリアしました。", vbInformation
+    Exit Sub
+ErrHandler:
+    Application.ScreenUpdating = True
+    MsgBox "エラー " & Err.Number & " : " & Err.Description, vbCritical
+End Sub
+
+
+'==================== レイアウト解析 ====================
+
+' シートA列を走査して「ブロック（設備×直）」と「項目行」を洗い出す
+Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
+                            ByVal unknownLabels As Collection) As Collection
+    Dim blocks As Collection, blk As Object, items As Object
+    Dim r As Long, lastRow As Long
+    Dim raw As String, key As String
+    Dim lineRaw As String, shiftRaw As String
+    Dim defaultDays As Object
+
+    Set blocks = New Collection
+    Set defaultDays = Nothing
+
+    lastRow = SCAN_END_ROW
+    If lastRow <= 0 Then lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < SCAN_START_ROW Then
+        Set ScanLayout = blocks
+        Exit Function
+    End If
+
+    Set blk = Nothing
+    For r = SCAN_START_ROW To lastRow
+        raw = CellText(ws.Cells(r, 1))
+        key = NormText(raw)
+        If Len(key) > 0 Then
+            If ParseHeader(key, lineRaw, shiftRaw) Then
+                Set blk = NewDict()
+                blk("row") = r
+                blk("line") = lineRaw
+                blk("shift") = shiftRaw
+                blk("title") = Trim$(raw)
+                Set blk("items") = NewDict()      ' key: 行番号(文字列) → DB列名
+                Set blk("days") = ReadDayMap(ws, r, defaultDays)
+                blocks.Add blk
+            ElseIf Not blk Is Nothing Then
+                If fieldMap.Exists(key) Then
+                    Set items = blk("items")
+                    items(CStr(r)) = fieldMap(key)
+                Else
+                    AddUnique unknownLabels, Trim$(raw)
+                End If
+            End If
+        End If
+    Next r
+
+    Set ScanLayout = blocks
+End Function
+
+' 見出し行か判定し、設備番号と区分に分解する（例: "8020昼" → "8020","昼"）
+Private Function ParseHeader(ByVal key As String, ByRef lineRaw As String, _
+                             ByRef shiftRaw As String) As Boolean
+    Dim i As Long, ch As String
+
+    lineRaw = "": shiftRaw = ""
+    i = 1
+    Do While i <= Len(key)
+        ch = Mid$(key, i, 1)
+        If ch < "0" Or ch > "9" Then Exit Do
+        i = i + 1
+    Loop
+
+    ' 先頭が数字でなければ項目名行
+    If i = 1 Then Exit Function
+    ' 数字が3桁未満なら設備番号とみなさない
+    If i - 1 < 3 Then Exit Function
+
+    lineRaw = Left$(key, i - 1)
+    shiftRaw = Mid$(key, i)
+    ParseHeader = True
+End Function
+
+' 見出し行に 1〜31 の日付が並んでいればその列対応を使い、
+' 無ければ B列=1日 の位置対応（既定）を使う
+Private Function ReadDayMap(ByVal ws As Worksheet, ByVal headerRow As Long, _
+                            ByRef defaultDays As Object) As Object
+    Dim d As Object, c As Long, v As Variant, n As Long, found As Long
+
+    Set d = NewDict()
+    found = 0
+    For c = FIRST_DATA_COL To LAST_DATA_COL
+        v = ws.Cells(headerRow, c).Value
+        If Not IsError(v) And Not IsEmpty(v) Then
+          If IsNumeric(v) Then
+            n = CLng(v)
+            If n >= 1 And n <= 31 Then
+                d(CStr(c)) = n
+                found = found + 1
+            End If
+          End If
+        End If
+    Next c
+
+    If found >= 20 Then
+        Set defaultDays = d
+        Set ReadDayMap = d
+        Exit Function
+    End If
+
+    If Not defaultDays Is Nothing Then
+        Set ReadDayMap = defaultDays
+        Exit Function
+    End If
+
+    ' 位置から生成（B列=1日, C列=2日 …）
+    Set d = NewDict()
+    For c = FIRST_DATA_COL To LAST_DATA_COL
+        n = c - FIRST_DATA_COL + 1
+        If n >= 1 And n <= 31 Then d(CStr(c)) = n
+    Next c
+    Set ReadDayMap = d
+End Function
+
+
+'==================== DB取得 ====================
+
+' 取得結果を  設備|直|日|DB列名 → 値  のディクショナリに詰める
+Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
+                           ByVal fieldMap As Object, ByRef recCount As Long) As Object
+    Dim cn As Object, cmd As Object, rs As Object
+    Dim cols As Object, cache As Object
+    Dim sql As String, k As Variant
+    Dim lineKey As String, shiftKey As String, keyBase As String, cellKey As String
+    Dim dv As Variant, val As Variant
+    Dim dayNo As Long
+
+    Set cols = UniqueColumns(fieldMap)
+    Set cache = NewDict()
+    recCount = 0
+
+    sql = BuildSql(fieldMap)
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    On Error GoTo CleanFail
+
+    Set cmd = CreateObject("ADODB.Command")
+    Set cmd.ActiveConnection = cn
+    cmd.CommandType = adCmdText
+    cmd.CommandTimeout = CMD_TIMEOUT
+
+    If USE_PARAMETERS Then
+        cmd.CommandText = sql
+        cmd.Parameters.Append cmd.CreateParameter("pFrom", DATE_PARAM_TYPE, adParamInput, 0, dFrom)
+        cmd.Parameters.Append cmd.CreateParameter("pTo", DATE_PARAM_TYPE, adParamInput, 0, dTo)
+    Else
+        cmd.CommandText = InlineDates(sql, dFrom, dTo)
+    End If
+
+    Set rs = cmd.Execute
+
+    Do Until rs.EOF
+        dv = rs.Fields(FLD_DATE).Value
+        If Not IsNull(dv) Then
+            dayNo = Day(CDate(dv))
+
+            lineKey = NormText(NzStr(rs.Fields(FLD_LINE).Value))
+            If Len(FLD_SHIFT) > 0 Then
+                shiftKey = NormText(NzStr(rs.Fields(FLD_SHIFT).Value))
+            Else
+                shiftKey = ""
+            End If
+            keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
+
+            For Each k In cols.Keys
+                val = rs.Fields(CStr(k)).Value
+                If Not IsNull(val) Then
+                    cellKey = keyBase & CStr(k)
+                    If AGGREGATE_MODE = "SUM" And cache.Exists(cellKey) Then
+                        If IsNumeric(val) And IsNumeric(cache(cellKey)) Then
+                            cache(cellKey) = CDbl(cache(cellKey)) + CDbl(val)
+                        Else
+                            cache(cellKey) = val
+                        End If
+                    Else
+                        cache(cellKey) = val
+                    End If
+                End If
+            Next k
+            recCount = recCount + 1
+        End If
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    cn.Close
+    Set FetchData = cache
+    Exit Function
+
+CleanFail:
+    Dim eNum As Long, eDesc As String
+    eNum = Err.Number: eDesc = Err.Description
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & sql
+End Function
+
+' SQL文の組み立て
+Private Function BuildSql(ByVal fieldMap As Object) As String
+    Dim cols As Object, k As Variant, sql As String
+
+    If Len(Trim$(SQL_OVERRIDE)) > 0 Then
+        BuildSql = SQL_OVERRIDE
+        Exit Function
+    End If
+
+    Set cols = UniqueColumns(fieldMap)
+
+    sql = "SELECT " & Q(FLD_DATE) & ", " & Q(FLD_LINE)
+    If Len(FLD_SHIFT) > 0 Then sql = sql & ", " & Q(FLD_SHIFT)
+    For Each k In cols.Keys
+        sql = sql & ", " & Q(CStr(k))
+    Next k
+    sql = sql & " FROM " & TABLE_NAME & _
+          " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
+    BuildSql = sql
+End Function
+
+' ? を日付リテラルに置き換える（USE_PARAMETERS = False 用）
+Private Function InlineDates(ByVal sql As String, ByVal dFrom As Date, ByVal dTo As Date) As String
+    Dim p As Long, s As String
+    s = sql
+    p = InStr(s, "?")
+    If p > 0 Then
+        s = Left$(s, p - 1) & Format$(dFrom, DATE_LITERAL_FMT) & Mid$(s, p + 1)
+        p = InStr(s, "?")
+        If p > 0 Then
+            s = Left$(s, p - 1) & Format$(dTo, DATE_LITERAL_FMT) & Mid$(s, p + 1)
+        End If
+    End If
+    InlineDates = s
+End Function
+
+' 取得が必要なDB列（重複除去）
+Private Function UniqueColumns(ByVal fieldMap As Object) As Object
+    Dim cols As Object, k As Variant
+    Set cols = NewDict()
+    For Each k In fieldMap.Keys
+        cols(CStr(fieldMap(k))) = 1
+    Next k
+    Set UniqueColumns = cols
+End Function
+
+Private Function Q(ByVal name As String) As String
+    If Len(QUOTE_OPEN) = 0 Then
+        Q = name
+    Else
+        Q = QUOTE_OPEN & name & QUOTE_CLOSE
+    End If
+End Function
+
+
+'==================== シート書き込み ====================
+
+Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal cache As Object, _
+                        ByVal shiftMap As Object, ByVal lineMap As Object, _
+                        ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long)
+    Dim blk As Object, items As Object, days As Object
+    Dim rKey As Variant, cKey As Variant
+    Dim r As Long, c As Long, dayNo As Long
+    Dim dbCol As String, keyBase As String, cellKey As String
+    Dim lineVal As String, shiftVal As String
+    Dim cel As Range
+
+    For Each blk In blocks
+        Set items = blk("items")
+        Set days = blk("days")
+        If items.Count > 0 Then
+            lineVal = MapValue(lineMap, CStr(blk("line")))
+            If Len(FLD_SHIFT) > 0 Then
+                shiftVal = MapValue(shiftMap, CStr(blk("shift")))
+            Else
+                shiftVal = ""
+            End If
+            keyBase = NormText(lineVal) & "|" & NormText(shiftVal) & "|"
+
+            For Each rKey In items.Keys
+                r = CLng(rKey)
+                dbCol = CStr(items(rKey))
+                For Each cKey In days.Keys
+                    c = CLng(cKey)
+                    dayNo = CLng(days(cKey))
+                    cellKey = keyBase & CStr(dayNo) & "|" & dbCol
+                    Set cel = ws.Cells(r, c)
+                    If cache.Exists(cellKey) Then
+                        If SKIP_FORMULA_CELLS And cel.HasFormula Then
+                            skipFormula = skipFormula + 1
+                        Else
+                            cel.Value = cache(cellKey)
+                            writeCount = writeCount + 1
+                        End If
+                    Else
+                        missCount = missCount + 1
+                        If WRITE_ZERO_WHEN_MISSING Then
+                            If SKIP_FORMULA_CELLS And cel.HasFormula Then
+                                skipFormula = skipFormula + 1
+                            Else
+                                cel.Value = 0
+                                writeCount = writeCount + 1
+                            End If
+                        End If
+                    End If
+                Next cKey
+            Next rKey
+        End If
+    Next blk
+End Sub
+
+Private Sub ClearBlocks(ByVal ws As Worksheet, ByVal blocks As Collection)
+    Dim blk As Object, items As Object, days As Object
+    Dim rKey As Variant, cKey As Variant
+    Dim cel As Range
+
+    For Each blk In blocks
+        Set items = blk("items")
+        Set days = blk("days")
+        For Each rKey In items.Keys
+            For Each cKey In days.Keys
+                Set cel = ws.Cells(CLng(rKey), CLng(cKey))
+                If Not (SKIP_FORMULA_CELLS And cel.HasFormula) Then cel.ClearContents
+            Next cKey
+        Next rKey
+    Next blk
+End Sub
+
+Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal blocks As Collection, _
+                             ByVal recCount As Long, ByVal writeCount As Long, _
+                             ByVal skipFormula As Long, ByVal missCount As Long, _
+                             ByVal unknownLabels As Collection) As String
+    Dim s As String, i As Long, n As Long
+
+    s = yy & "年" & mm & "月 の取り込みが完了しました。" & vbCrLf & vbCrLf
+    s = s & "対象ブロック数 : " & blocks.Count & vbCrLf
+    s = s & "取得レコード数 : " & recCount & vbCrLf
+    s = s & "書き込みセル数 : " & writeCount & vbCrLf
+    s = s & "該当データなし : " & missCount & " セル" & vbCrLf
+    If skipFormula > 0 Then s = s & "数式のためスキップ : " & skipFormula & " セル" & vbCrLf
+
+    If unknownLabels.Count > 0 Then
+        s = s & vbCrLf & "※ 対応表(BuildFieldMap)に無い項目名（取り込み対象外）:" & vbCrLf
+        n = unknownLabels.Count
+        If n > 15 Then n = 15
+        For i = 1 To n
+            s = s & "  ・" & unknownLabels(i) & vbCrLf
+        Next i
+        If unknownLabels.Count > n Then s = s & "  ・ほか " & (unknownLabels.Count - n) & " 件" & vbCrLf
+    End If
+
+    If recCount = 0 Then
+        s = s & vbCrLf & "レコードが0件でした。対象年月・接続先をご確認ください。"
+    End If
+
+    BuildReport = s
+End Function
+
+
+'==================== 汎用ヘルパー ====================
+
+Private Function GetTargetSheet() As Worksheet
+    If Len(SHEET_NAME) = 0 Then
+        If ActiveSheet Is Nothing Then
+            Err.Raise vbObjectError + 10, , "対象シートが取得できません。"
+        End If
+        Set GetTargetSheet = ActiveSheet
+    Else
+        On Error GoTo NotFound
+        Set GetTargetSheet = ThisWorkbook.Worksheets(SHEET_NAME)
+        Exit Function
+NotFound:
+        Err.Raise vbObjectError + 11, , "シート「" & SHEET_NAME & "」が見つかりません。"
+    End If
+End Function
+
+Private Function NewDict() As Object
+    Set NewDict = CreateObject("Scripting.Dictionary")
+End Function
+
+Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
+    m(NormText(sheetLabel)) = dbName
+End Sub
+
+Private Function MapValue(ByVal m As Object, ByVal key As String) As String
+    Dim k As String
+    k = NormText(key)
+    If m.Exists(k) Then
+        MapValue = CStr(m(k))
+    Else
+        MapValue = key
+    End If
+End Function
+
+' 表記ゆれ吸収：空白除去 ＋ 全角→半角（英数・カナ）
+Private Function NormText(ByVal s As String) As String
+    Dim t As String
+    t = s
+    t = Replace(t, " ", "")
+    t = Replace(t, ChrW(&H3000), "")   ' 全角スペース
+    t = Replace(t, vbTab, "")
+    t = Replace(t, vbCr, "")
+    t = Replace(t, vbLf, "")
+    On Error Resume Next
+    t = StrConv(t, vbNarrow)
+    On Error GoTo 0
+    NormText = t
+End Function
+
+' セルの表示値を文字列で取得（エラー値も安全に扱う）
+Private Function CellText(ByVal cel As Range) As String
+    Dim v As Variant
+    v = cel.Value
+    If IsError(v) Or IsEmpty(v) Then
+        CellText = ""
+    Else
+        CellText = CStr(v)
+    End If
+End Function
+
+Private Function NzStr(ByVal v As Variant) As String
+    If IsNull(v) Or IsEmpty(v) Then
+        NzStr = ""
+    Else
+        NzStr = CStr(v)
+    End If
+End Function
+
+Private Sub AddUnique(ByVal c As Collection, ByVal s As String)
+    Dim i As Long
+    For i = 1 To c.Count
+        If c(i) = s Then Exit Sub
+    Next i
+    c.Add s
+End Sub
+
+' 年セルの読み取り（2026 / 2026年 / 日付 いずれでも可）
+Private Function ReadYear(ByVal cel As Range) As Long
+    Dim v As Variant, n As Long
+    v = cel.Value
+    If IsEmpty(v) Or IsError(v) Then Exit Function
+    If IsDate(v) Then
+        ReadYear = Year(CDate(v))
+    ElseIf IsNumeric(v) Then
+        n = CLng(v)
+        If n >= 1900 And n <= 2999 Then ReadYear = n
+    Else
+        ReadYear = ExtractNumber(CStr(v))
+    End If
+End Function
+
+' 月セルの読み取り（7 / 7月 / 日付 いずれでも可）
+Private Function ReadMonth(ByVal cel As Range) As Long
+    Dim v As Variant
+    v = cel.Value
+    If IsEmpty(v) Or IsError(v) Then Exit Function
+    If IsDate(v) Then
+        ReadMonth = Month(CDate(v))
+    ElseIf IsNumeric(v) Then
+        ReadMonth = CLng(v)
+    Else
+        ReadMonth = ExtractNumber(CStr(v))
+    End If
+End Function
+
+' 文字列から最初の数字並びを取り出す
+Private Function ExtractNumber(ByVal s As String) As Long
+    Dim t As String, i As Long, ch As String, buf As String
+    t = NormText(s)
+    For i = 1 To Len(t)
+        ch = Mid$(t, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            buf = buf & ch
+        ElseIf Len(buf) > 0 Then
+            Exit For
+        End If
+    Next i
+    If Len(buf) > 0 Then ExtractNumber = CLng(buf)
+End Function
