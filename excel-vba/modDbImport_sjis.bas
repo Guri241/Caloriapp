@@ -116,7 +116,7 @@ End Sub
 
 '================== ⑤ シートのレイアウト設定 ==================
 
-Private Const SHEET_NAME     As String = ""    ' 空ならアクティブシート
+Private Const SHEET_NAME     As String = "Sub吸い上げ"  ' 取り込み先シート（空ならアクティブシート）
 Private Const YEAR_CELL      As String = "A1"  ' 年
 Private Const MONTH_CELL     As String = "B1"  ' 月
 Private Const FIRST_DATA_COL As Long = 2       ' B列 = 1日
@@ -738,19 +738,50 @@ End Function
 
 '==================== 汎用ヘルパー ====================
 
+' 取り込み先シートを取得
+'   SHEET_NAME が空 : アクティブシート
+'   指定あり        : マクロのあるブック → 見つからなければアクティブブック の順に探す
 Private Function GetTargetSheet() As Worksheet
+    Dim ws As Worksheet
+
     If Len(SHEET_NAME) = 0 Then
         If ActiveSheet Is Nothing Then
             Err.Raise vbObjectError + 10, , "対象シートが取得できません。"
         End If
         Set GetTargetSheet = ActiveSheet
-    Else
-        On Error GoTo NotFound
-        Set GetTargetSheet = ThisWorkbook.Worksheets(SHEET_NAME)
         Exit Function
-NotFound:
-        Err.Raise vbObjectError + 11, , "シート「" & SHEET_NAME & "」が見つかりません。"
     End If
+
+    Set ws = FindSheet(ThisWorkbook, SHEET_NAME)
+    If ws Is Nothing Then
+        If Not ActiveWorkbook Is Nothing Then
+            If Not ActiveWorkbook Is ThisWorkbook Then
+                Set ws = FindSheet(ActiveWorkbook, SHEET_NAME)
+            End If
+        End If
+    End If
+
+    If ws Is Nothing Then
+        Err.Raise vbObjectError + 11, , "シート「" & SHEET_NAME & "」が見つかりません。" & vbCrLf & _
+                                        "シート名を確認するか、SHEET_NAME を書き換えてください。"
+    End If
+
+    Set GetTargetSheet = ws
+End Function
+
+' ブック内からシート名で探す（大文字小文字・全角半角・空白の違いは無視）
+Private Function FindSheet(ByVal wb As Workbook, ByVal sheetName As String) As Worksheet
+    Dim sh As Worksheet, target As String
+
+    If wb Is Nothing Then Exit Function
+    target = NormText(sheetName)
+
+    For Each sh In wb.Worksheets
+        If StrComp(NormText(sh.Name), target, vbTextCompare) = 0 Then
+            Set FindSheet = sh
+            Exit Function
+        End If
+    Next sh
 End Function
 
 Private Function NewDict() As Object
