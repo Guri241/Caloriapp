@@ -122,7 +122,35 @@ Private Const MONTH_CELL     As String = "B1"  ' 月
 Private Const FIRST_DATA_COL As Long = 2       ' B列 = 1日
 Private Const LAST_DATA_COL  As Long = 32      ' AF列 = 31日
 Private Const SCAN_START_ROW As Long = 2       ' 見出し探索の開始行（1行目は年月なので除外）
-Private Const SCAN_END_ROW   As Long = 0       ' 0 = A列の最終行まで
+Private Const SCAN_END_ROW   As Long = 0       ' 0 = A列の最終行まで（0のままでOK）
+
+'--- ブロック見出し行の判定方法 -----------------------------------
+' セルに数値データが1件も入っていない空の表でも判定できるよう、
+' 判定は「A列の文字（見出し・項目名）」だけで行います。
+'
+' LINE_LIST : 設備番号をカンマ区切りで列挙すると、その番号で始まる行だけを
+'             ブロック見出しとみなします（最も確実。例 "8020,8021,8022"）。
+'             空にした場合は「A列の文字が LINE_DIGITS_MIN 桁以上の数字で始まる行」
+'             を見出しとみなします。
+Private Const LINE_LIST       As String = "8020,8021,8022"
+Private Const LINE_DIGITS_MIN As Long = 3
+
+'--- 日付(1〜31)の列の決め方 --------------------------------------
+'  "POSITION" : 列の位置で決める（FIRST_DATA_COL = 1日、以降 1列 = 1日）
+'               ← 表が空でも使えるため既定
+'  "HEADER"   : 各ブロックの見出し行に入っている 1〜31 の数字を読む
+'               （数字が無いブロックは POSITION で補完）
+'  "DATEROW"  : DAY_HEADER_ROW で指定した1行だけを読み、全ブロックで使う
+'               （数字が無ければ POSITION で補完）
+Private Const DAY_COL_MODE   As String = "POSITION"
+Private Const DAY_HEADER_ROW As Long = 0       ' "DATEROW" のときの行番号
+
+' 月末を超える日の列（30日までの月の31日列など）は書き込まない
+Private Const LIMIT_TO_MONTH_END   As Boolean = True
+' 月末を超える日の列の内容をクリアする（前月の値が残る場合に True）
+Private Const CLEAR_BEYOND_MONTH_END As Boolean = False
+' 見出し行の日付欄に 1〜月末 を書き込む（日付行も空の新規表で使う）
+Private Const WRITE_DAY_HEADERS    As Boolean = False
 
 Private Const SKIP_FORMULA_CELLS     As Boolean = True   ' 数式セルは上書きしない
 Private Const WRITE_ZERO_WHEN_MISSING As Boolean = False ' DBに該当日が無いとき0を書く
@@ -147,6 +175,7 @@ Public Sub ImportFromDb()
     Dim yy As Long, mm As Long
     Dim dFrom As Date, dTo As Date
     Dim recCount As Long, writeCount As Long, skipFormula As Long, missCount As Long
+    Dim monthDays As Long
     Dim calcMode As XlCalculation
     Dim restored As Boolean
 
@@ -164,6 +193,7 @@ Public Sub ImportFromDb()
     End If
     dFrom = DateSerial(yy, mm, 1)
     dTo = DateSerial(yy, mm + 1, 1)
+    monthDays = Day(dTo - 1)                 ' その月の日数（28〜31）
 
     Set fieldMap = NewDict(): BuildFieldMap fieldMap
     Set shiftMap = NewDict(): BuildShiftMap shiftMap
@@ -185,15 +215,17 @@ Public Sub ImportFromDb()
     calcMode = Application.Calculation
     Application.Calculation = xlCalculationManual
 
-    If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks
+    If WRITE_DAY_HEADERS Then WriteDayHeaders ws, blocks, monthDays
+    If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks, monthDays
 
-    WriteBlocks ws, blocks, cache, shiftMap, lineMap, writeCount, skipFormula, missCount
+    WriteBlocks ws, blocks, cache, shiftMap, lineMap, monthDays, _
+                writeCount, skipFormula, missCount
 
     Application.Calculation = calcMode
     Application.ScreenUpdating = True
     restored = True
 
-    MsgBox BuildReport(yy, mm, blocks, recCount, writeCount, skipFormula, missCount, unknownLabels), _
+    MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, unknownLabels), _
            vbInformation, "DB取り込み完了"
     Exit Sub
 
@@ -256,7 +288,7 @@ Public Sub ClearImportArea()
               vbQuestion + vbYesNo, "クリア") <> vbYes Then Exit Sub
 
     Application.ScreenUpdating = False
-    ClearBlocks ws, blocks
+    ClearBlocks ws, blocks, 31
     Application.ScreenUpdating = True
     MsgBox "クリアしました。", vbInformation
     Exit Sub
@@ -299,7 +331,7 @@ Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
                 blk("shift") = shiftRaw
                 blk("title") = Trim$(raw)
                 Set blk("items") = NewDict()      ' key: 行番号(文字列) → DB列名
-                Set blk("days") = ReadDayMap(ws, r, defaultDays)
+                Set blk("days") = BuildDayMap(ws, r, defaultDays)
                 blocks.Add blk
             ElseIf Not blk Is Nothing Then
                 If fieldMap.Exists(key) Then
@@ -316,11 +348,32 @@ Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
 End Function
 
 ' 見出し行か判定し、設備番号と区分に分解する（例: "8020昼" → "8020","昼"）
+'   判定はA列の文字だけで行うため、データ欄が空でも動作します。
 Private Function ParseHeader(ByVal key As String, ByRef lineRaw As String, _
                              ByRef shiftRaw As String) As Boolean
     Dim i As Long, ch As String
+    Dim codes() As String, code As String, n As Long
 
     lineRaw = "": shiftRaw = ""
+
+    ' ① LINE_LIST が指定されていれば、その設備番号で始まる行だけを見出しとする
+    If Len(Trim$(LINE_LIST)) > 0 Then
+        codes = Split(LINE_LIST, ",")
+        For n = LBound(codes) To UBound(codes)
+            code = NormText(codes(n))
+            If Len(code) > 0 Then
+                If Left$(key, Len(code)) = code Then
+                    lineRaw = code
+                    shiftRaw = Mid$(key, Len(code) + 1)
+                    ParseHeader = True
+                    Exit Function
+                End If
+            End If
+        Next n
+        Exit Function
+    End If
+
+    ' ② LINE_LIST が空のときは「先頭の数字並び」を設備番号とみなす
     i = 1
     Do While i <= Len(key)
         ch = Mid$(key, i, 1)
@@ -328,57 +381,82 @@ Private Function ParseHeader(ByVal key As String, ByRef lineRaw As String, _
         i = i + 1
     Loop
 
-    ' 先頭が数字でなければ項目名行
-    If i = 1 Then Exit Function
-    ' 数字が3桁未満なら設備番号とみなさない
-    If i - 1 < 3 Then Exit Function
+    If i = 1 Then Exit Function                  ' 先頭が数字でない → 項目名行
+    If i - 1 < LINE_DIGITS_MIN Then Exit Function ' 桁数が足りない → 見出しとみなさない
 
     lineRaw = Left$(key, i - 1)
     shiftRaw = Mid$(key, i)
     ParseHeader = True
 End Function
 
-' 見出し行に 1〜31 の日付が並んでいればその列対応を使い、
-' 無ければ B列=1日 の位置対応（既定）を使う
-Private Function ReadDayMap(ByVal ws As Worksheet, ByVal headerRow As Long, _
-                            ByRef defaultDays As Object) As Object
-    Dim d As Object, c As Long, v As Variant, n As Long, found As Long
+' 日付(1〜31)とシート列の対応表を作る
+'   既定( DAY_COL_MODE = "POSITION" )は列の位置だけで決めるため、
+'   表にデータや日付が一切入っていなくても正しく対応します。
+Private Function BuildDayMap(ByVal ws As Worksheet, ByVal headerRow As Long, _
+                             ByRef cachedDays As Object) As Object
+    Dim mode As String, d As Object
 
-    Set d = NewDict()
-    found = 0
-    For c = FIRST_DATA_COL To LAST_DATA_COL
-        v = ws.Cells(headerRow, c).Value
-        If Not IsError(v) And Not IsEmpty(v) Then
-          If IsNumeric(v) Then
-            n = CLng(v)
-            If n >= 1 And n <= 31 Then
-                d(CStr(c)) = n
-                found = found + 1
-            End If
-          End If
+    mode = UCase$(Trim$(DAY_COL_MODE))
+
+    If mode = "HEADER" Then
+        Set d = ReadDayNumbers(ws, headerRow)
+        If d.Count > 0 Then
+            Set BuildDayMap = d
+            Exit Function
         End If
-    Next c
 
-    If found >= 20 Then
-        Set defaultDays = d
-        Set ReadDayMap = d
-        Exit Function
+    ElseIf mode = "DATEROW" Then
+        If cachedDays Is Nothing And DAY_HEADER_ROW > 0 Then
+            Set cachedDays = ReadDayNumbers(ws, DAY_HEADER_ROW)
+        End If
+        If Not cachedDays Is Nothing Then
+            If cachedDays.Count > 0 Then
+                Set BuildDayMap = cachedDays
+                Exit Function
+            End If
+        End If
     End If
 
-    If Not defaultDays Is Nothing Then
-        Set ReadDayMap = defaultDays
-        Exit Function
-    End If
+    ' POSITION（既定）／読み取れなかった場合のフォールバック
+    Set BuildDayMap = PositionDayMap()
+End Function
 
-    ' 位置から生成（B列=1日, C列=2日 …）
+' 列の位置から 列→日 を作る（FIRST_DATA_COL = 1日）
+Private Function PositionDayMap() As Object
+    Dim d As Object, c As Long, n As Long
     Set d = NewDict()
     For c = FIRST_DATA_COL To LAST_DATA_COL
         n = c - FIRST_DATA_COL + 1
         If n >= 1 And n <= 31 Then d(CStr(c)) = n
     Next c
-    Set ReadDayMap = d
+    Set PositionDayMap = d
 End Function
 
+' 指定行に入っている 1〜31 の数字（または日付）を読んで 列→日 を作る
+Private Function ReadDayNumbers(ByVal ws As Worksheet, ByVal rowNo As Long) As Object
+    Dim d As Object, c As Long, v As Variant, n As Long
+
+    Set d = NewDict()
+    If rowNo <= 0 Then
+        Set ReadDayNumbers = d
+        Exit Function
+    End If
+
+    For c = FIRST_DATA_COL To LAST_DATA_COL
+        v = ws.Cells(rowNo, c).Value
+        If Not IsError(v) And Not IsEmpty(v) Then
+            n = 0
+            If IsDate(v) Then
+                n = Day(CDate(v))
+            ElseIf IsNumeric(v) Then
+                n = CLng(v)
+            End If
+            If n >= 1 And n <= 31 Then d(CStr(c)) = n
+        End If
+    Next c
+
+    Set ReadDayNumbers = d
+End Function
 
 '==================== DB取得 ====================
 
@@ -525,7 +603,7 @@ End Function
 '==================== シート書き込み ====================
 
 Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal cache As Object, _
-                        ByVal shiftMap As Object, ByVal lineMap As Object, _
+                        ByVal shiftMap As Object, ByVal lineMap As Object, ByVal monthDays As Long, _
                         ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long)
     Dim blk As Object, items As Object, days As Object
     Dim rKey As Variant, cKey As Variant
@@ -552,23 +630,31 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
                 For Each cKey In days.Keys
                     c = CLng(cKey)
                     dayNo = CLng(days(cKey))
-                    cellKey = keyBase & CStr(dayNo) & "|" & dbCol
                     Set cel = ws.Cells(r, c)
-                    If cache.Exists(cellKey) Then
-                        If SKIP_FORMULA_CELLS And cel.HasFormula Then
-                            skipFormula = skipFormula + 1
-                        Else
-                            cel.Value = cache(cellKey)
-                            writeCount = writeCount + 1
+
+                    If dayNo > monthDays And LIMIT_TO_MONTH_END Then
+                        ' その月に存在しない日（31日まで無い月）は対象外
+                        If CLEAR_BEYOND_MONTH_END Then
+                            If Not (SKIP_FORMULA_CELLS And cel.HasFormula) Then cel.ClearContents
                         End If
                     Else
-                        missCount = missCount + 1
-                        If WRITE_ZERO_WHEN_MISSING Then
+                        cellKey = keyBase & CStr(dayNo) & "|" & dbCol
+                        If cache.Exists(cellKey) Then
                             If SKIP_FORMULA_CELLS And cel.HasFormula Then
                                 skipFormula = skipFormula + 1
                             Else
-                                cel.Value = 0
+                                cel.Value = cache(cellKey)
                                 writeCount = writeCount + 1
+                            End If
+                        Else
+                            missCount = missCount + 1
+                            If WRITE_ZERO_WHEN_MISSING Then
+                                If SKIP_FORMULA_CELLS And cel.HasFormula Then
+                                    skipFormula = skipFormula + 1
+                                Else
+                                    cel.Value = 0
+                                    writeCount = writeCount + 1
+                                End If
                             End If
                         End If
                     End If
@@ -578,7 +664,7 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
     Next blk
 End Sub
 
-Private Sub ClearBlocks(ByVal ws As Worksheet, ByVal blocks As Collection)
+Private Sub ClearBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal maxDay As Long)
     Dim blk As Object, items As Object, days As Object
     Dim rKey As Variant, cKey As Variant
     Dim cel As Range
@@ -588,20 +674,44 @@ Private Sub ClearBlocks(ByVal ws As Worksheet, ByVal blocks As Collection)
         Set days = blk("days")
         For Each rKey In items.Keys
             For Each cKey In days.Keys
-                Set cel = ws.Cells(CLng(rKey), CLng(cKey))
-                If Not (SKIP_FORMULA_CELLS And cel.HasFormula) Then cel.ClearContents
+                If CLng(days(cKey)) <= maxDay Then
+                    Set cel = ws.Cells(CLng(rKey), CLng(cKey))
+                    If Not (SKIP_FORMULA_CELLS And cel.HasFormula) Then cel.ClearContents
+                End If
             Next cKey
         Next rKey
     Next blk
 End Sub
 
-Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal blocks As Collection, _
+' 見出し行の日付欄に 1〜月末 を書き込む（日付行も空の新規表向け）
+Private Sub WriteDayHeaders(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal monthDays As Long)
+    Dim blk As Object, days As Object, cKey As Variant
+    Dim cel As Range, dayNo As Long
+
+    For Each blk In blocks
+        Set days = blk("days")
+        For Each cKey In days.Keys
+            dayNo = CLng(days(cKey))
+            Set cel = ws.Cells(CLng(blk("row")), CLng(cKey))
+            If Not (SKIP_FORMULA_CELLS And cel.HasFormula) Then
+                If dayNo <= monthDays Then
+                    cel.Value = dayNo
+                ElseIf LIMIT_TO_MONTH_END Then
+                    cel.ClearContents
+                End If
+            End If
+        Next cKey
+    Next blk
+End Sub
+
+Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays As Long, _
+                             ByVal blocks As Collection, _
                              ByVal recCount As Long, ByVal writeCount As Long, _
                              ByVal skipFormula As Long, ByVal missCount As Long, _
                              ByVal unknownLabels As Collection) As String
     Dim s As String, i As Long, n As Long
 
-    s = yy & "年" & mm & "月 の取り込みが完了しました。" & vbCrLf & vbCrLf
+    s = yy & "年" & mm & "月 (1〜" & monthDays & "日) の取り込みが完了しました。" & vbCrLf & vbCrLf
     s = s & "対象ブロック数 : " & blocks.Count & vbCrLf
     s = s & "取得レコード数 : " & recCount & vbCrLf
     s = s & "書き込みセル数 : " & writeCount & vbCrLf
