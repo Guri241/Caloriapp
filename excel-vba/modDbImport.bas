@@ -166,7 +166,7 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄
 ' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
 Private Const AGGREGATE_MODE As String = "LAST"
 
-'--- 品種별の生産数を自動で行にする -------------------------------
+'--- 品種別の生産数を自動で行にする -------------------------------
 '   1日 × 設備 × 直 の中に品種（背番号・品番）ごとの行があるため、
 '   品種ごとに合計して「〇〇生産数」の行へ入れます。
 '   シートに無い品種が出てきた場合は、行を自動で追加して表示します。
@@ -602,7 +602,7 @@ Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
     Set ScanLayout = blocks
 End Function
 
-' 「〇〇生産数」の行か（品種별の行）
+' 「〇〇生産数」の行か（品種別の行）
 Private Function IsProductRow(ByVal key As String) As Boolean
     Dim suf As String
     If Not SPLIT_ENABLED Then Exit Function
