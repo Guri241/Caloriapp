@@ -226,6 +226,68 @@ ErrHandler:
 End Sub
 
 '------------------------------------------------------------------
+' テーブル／ビュー一覧 : 接続先で参照できる名前を表示する
+'   「テーブルがありません」と言われたときに、正しい名前を確認するため
+'   結果はイミディエイト ウィンドウ（Ctrl+G）にも全件出力します
+'------------------------------------------------------------------
+Public Sub ShowTables()
+    Const adSchemaTables As Long = 20
+    Const MAX_SHOW As Long = 60
+
+    Dim cn As Object, rs As Object
+    Dim msg As String, nm As String, typ As String, cat As String, sch As String
+    Dim full As String, n As Long, shown As Long
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    Set rs = cn.OpenSchema(adSchemaTables)
+
+    Do Until rs.EOF
+        nm = NzStr(rs.Fields("TABLE_NAME").Value)
+        typ = NzStr(rs.Fields("TABLE_TYPE").Value)
+        cat = NzStr(rs.Fields("TABLE_CATALOG").Value)
+        sch = NzStr(rs.Fields("TABLE_SCHEMA").Value)
+
+        If UCase$(typ) <> "SYSTEM TABLE" And Len(nm) > 0 Then
+            full = nm
+            If Len(sch) > 0 Then full = sch & "." & full
+            If Len(cat) > 0 Then full = cat & "." & full
+
+            n = n + 1
+            Debug.Print n & vbTab & typ & vbTab & full
+            If shown < MAX_SHOW Then
+                msg = msg & full & "   [" & typ & "]" & vbCrLf
+                shown = shown + 1
+            End If
+        End If
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    cn.Close
+
+    MsgBox "参照できるテーブル／ビュー : " & n & " 件" & vbCrLf & _
+           "（全件はイミディエイト ウィンドウ Ctrl+G に出力しました）" & vbCrLf & vbCrLf & _
+           msg & IIf(n > shown, "…ほか " & (n - shown) & " 件", ""), _
+           vbInformation, "テーブル一覧"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "一覧を取得できませんでした。" & vbCrLf & vbCrLf & _
+           "エラー " & errNum & " : " & errDesc, vbCritical, "テーブル一覧"
+End Sub
+
+'------------------------------------------------------------------
 ' 列一覧の確認 : TABLE_NAME の列名と、先頭1件の値を表示する
 '   接続できたら最初にこれを実行し、②③④の設定に写してください
 '------------------------------------------------------------------
