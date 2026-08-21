@@ -166,6 +166,18 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄
 ' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
 Private Const AGGREGATE_MODE As String = "LAST"
 
+'--- 品種별の生産数を自動で行にする -------------------------------
+'   1日 × 設備 × 直 の中に品種（背番号・品番）ごとの行があるため、
+'   品種ごとに合計して「〇〇生産数」の行へ入れます。
+'   シートに無い品種が出てきた場合は、行を自動で追加して表示します。
+Private Const SPLIT_ENABLED       As Boolean = True
+Private Const SPLIT_COLUMN        As String = "SEBAN"      ' 品種を表す列（SEBAN / HINBAN_CD など）
+Private Const SPLIT_VALUE_COLUMN  As String = "KAKO_CNT"   ' 生産数の列
+Private Const PRODUCT_ROW_SUFFIX  As String = "生産数"     ' 行名の末尾（「TT生産数」の「生産数」）
+Private Const PRODUCT_ROW_ANCHOR  As String = "良品数(個)" ' 品種行を差し込む基準の項目
+Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True      ' 無い品種の行を自動で追加する
+Private Const SPLIT_PREFIX        As String = "<品種>"     ' 内部処理用（変更不要）
+
 ' 設備コードの接頭辞。BuildLineMap に登録が無い設備番号に自動で付けます。
 '   例) LINE_CODE_PREFIX = "AS" のとき、シートの 8020 → DBの "AS8020" を探します
 '       付けない場合は "" のままにしてください
@@ -236,6 +248,17 @@ Private Sub BuildLineMap(ByVal m As Object)
 End Sub
 
 
+'================== ⑥ 品種の表示名 ==================
+' DBの品種コード（SPLIT_COLUMN の値） → シートの行名に使う表示名
+'   例) 背番号 "TMC300D" を「TT生産数」の行に入れたい場合  AddMap m, "TMC300D", "TT"
+'   登録が無い品種は、コードをそのまま行名に使い、行が無ければ自動で追加します
+'       （"TMC825D" → 「TMC825D生産数」の行を作成）
+Private Sub BuildProductMap(ByVal m As Object)
+    ' AddMap m, "TMC300D", "TT"
+    ' AddMap m, "TMC825B", "825B/TNGA"
+End Sub
+
+
 '==================================================================
 '  ここから下は通常編集不要
 '==================================================================
@@ -245,7 +268,9 @@ End Sub
 '------------------------------------------------------------------
 Public Sub ImportFromDb()
     Dim ws As Worksheet
-    Dim fieldMap As Object, shiftMap As Object, lineMap As Object
+    Dim fieldMap As Object, shiftMap As Object, lineMap As Object, productMap As Object
+    Dim splits As Object
+    Dim addedRows As Long
     Dim blocks As Collection, unknownLabels As Collection, emptyBlocks As Collection
     Dim cache As Object
     Dim yy As Long, mm As Long
@@ -275,6 +300,8 @@ Public Sub ImportFromDb()
     Set fieldMap = NewDict(): BuildFieldMap fieldMap
     Set shiftMap = NewDict(): BuildShiftMap shiftMap
     Set lineMap = NewDict(): BuildLineMap lineMap
+    Set productMap = NewDict(): BuildProductMap productMap
+    Set splits = NewDict()
     If fieldMap.Count = 0 Then
         Err.Raise vbObjectError + 3, , "BuildFieldMap に項目が登録されていません。"
     End If
@@ -287,11 +314,17 @@ Public Sub ImportFromDb()
                                         "SCAN_START_ROW / シート指定をご確認ください。"
     End If
 
-    Set cache = FetchData(dFrom, dTo, fieldMap, recCount)
+    Set cache = FetchData(dFrom, dTo, fieldMap, productMap, splits, recCount)
 
     Application.ScreenUpdating = False
     calcMode = Application.Calculation
     Application.Calculation = xlCalculationManual
+
+    ' シートに無い品種の行を追加してから、行位置を取り直す
+    If SPLIT_ENABLED And AUTO_ADD_PRODUCT_ROWS Then
+        addedRows = EnsureProductRows(ws, blocks, splits, shiftMap, lineMap)
+        If addedRows > 0 Then Set blocks = ScanLayout(ws, fieldMap, unknownLabels)
+    End If
 
     If WRITE_DAY_HEADERS Then WriteDayHeaders ws, blocks, monthDays
     If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks, monthDays
@@ -304,7 +337,7 @@ Public Sub ImportFromDb()
     restored = True
 
     MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, _
-                       unknownLabels, emptyBlocks), _
+                       addedRows, unknownLabels, emptyBlocks), _
            vbInformation, "DB取り込み完了"
     Exit Sub
 
@@ -556,6 +589,9 @@ Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
                 If fieldMap.Exists(key) Then
                     Set items = blk("items")
                     items(CStr(r)) = fieldMap(key)
+                ElseIf IsProductRow(key) Then
+                    Set items = blk("items")
+                    items(CStr(r)) = SPLIT_PREFIX & ProductNameOfRow(key)
                 Else
                     AddUnique unknownLabels, Trim$(raw)
                 End If
@@ -564,6 +600,20 @@ Private Function ScanLayout(ByVal ws As Worksheet, ByVal fieldMap As Object, _
     Next r
 
     Set ScanLayout = blocks
+End Function
+
+' 「〇〇生産数」の行か（品種별の行）
+Private Function IsProductRow(ByVal key As String) As Boolean
+    Dim suf As String
+    If Not SPLIT_ENABLED Then Exit Function
+    suf = NormText(PRODUCT_ROW_SUFFIX)
+    If Len(suf) = 0 Or Len(key) <= Len(suf) Then Exit Function
+    IsProductRow = (StrComp(Right$(key, Len(suf)), suf, vbTextCompare) = 0)
+End Function
+
+' 「TT生産数」→「TT」
+Private Function ProductNameOfRow(ByVal key As String) As String
+    ProductNameOfRow = Left$(key, Len(key) - Len(NormText(PRODUCT_ROW_SUFFIX)))
 End Function
 
 ' 見出し行か判定し、設備番号と区分に分解する（例: "8020昼" → "8020","昼"）
@@ -681,13 +731,16 @@ End Function
 
 ' 取得結果を  設備|直|日|DB列名 → 値  のディクショナリに詰める
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
-                           ByVal fieldMap As Object, ByRef recCount As Long) As Object
+                           ByVal fieldMap As Object, ByVal productMap As Object, _
+                           ByVal splits As Object, ByRef recCount As Long) As Object
     Dim cn As Object, rs As Object
     Dim specs As Object, cache As Object
     Dim sql As String, k As Variant, spec As String
     Dim lineKey As String, shiftKey As String, keyBase As String, cellKey As String
     Dim dv As Variant, val As Variant
     Dim dayNo As Long
+    Dim prodRaw As String, prodName As String, prodKey As String, blockKey As String
+    Dim prodList As Object
 
     Set specs = UniqueSpecs(fieldMap)
     Set cache = NewDict()
@@ -729,6 +782,24 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                     End If
                 End If
             Next k
+            ' 品種ごとの生産数を合計し、出てきた品種を記録する
+            If SPLIT_ENABLED Then
+                prodRaw = NzStr(rs.Fields(SPLIT_COLUMN).Value)
+                If Len(Trim$(prodRaw)) > 0 Then
+                    prodName = MapValue(productMap, prodRaw)
+                    prodKey = NormText(prodName)
+                    val = rs.Fields(SPLIT_VALUE_COLUMN).Value
+                    If Not IsNull(val) Then
+                        Accumulate cache, keyBase & SPLIT_PREFIX & prodKey, val, "SUM"
+                    End If
+
+                    blockKey = lineKey & "|" & shiftKey
+                    If Not splits.Exists(blockKey) Then Set splits(blockKey) = NewDict()
+                    Set prodList = splits(blockKey)
+                    prodList(prodKey) = prodName
+                End If
+            End If
+
             recCount = recCount + 1
         End If
         rs.MoveNext
@@ -923,6 +994,12 @@ Private Function CollectColumns(ByVal fieldMap As Object) As Object
         End If
         If Len(SpecPart(spec, 2)) > 0 Then cols(SpecPart(spec, 2)) = 1
     Next k
+
+    If SPLIT_ENABLED Then
+        If Len(SPLIT_COLUMN) > 0 Then cols(SPLIT_COLUMN) = 1
+        If Len(SPLIT_VALUE_COLUMN) > 0 Then cols(SPLIT_VALUE_COLUMN) = 1
+    End If
+
     Set CollectColumns = cols
 End Function
 
@@ -1037,6 +1114,96 @@ Private Sub ClearBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
     Next blk
 End Sub
 
+' シートに無い品種の行を追加する。戻り値は追加した行数
+'   追加位置 : その品種行群の直後 → 無ければ PRODUCT_ROW_ANCHOR の行の直後 → 無ければ最終項目行の直後
+Private Function EnsureProductRows(ByVal ws As Worksheet, ByVal blocks As Collection, _
+                                   ByVal splits As Object, ByVal shiftMap As Object, _
+                                   ByVal lineMap As Object) As Long
+    Dim bi As Long, blk As Object, items As Object, prodList As Object
+    Dim rKey As Variant, pKey As Variant
+    Dim spec As String, blockKey As String, lineVal As String, shiftVal As String
+    Dim anchorKey As String, label As String
+    Dim existing As Object, missing() As String, nMissing As Long
+    Dim r As Long, lastProdRow As Long, anchorRow As Long, lastItemRow As Long, pos As Long
+    Dim added As Long, i As Long
+
+    anchorKey = NormText(PRODUCT_ROW_ANCHOR)
+
+    ' 行を挿入すると下の行番号がずれるため、下のブロックから処理する
+    For bi = blocks.Count To 1 Step -1
+        Set blk = blocks(bi)
+        Set items = blk("items")
+        If items.Count > 0 Then
+
+            lineVal = MapLine(lineMap, CStr(blk("line")))
+            If Len(FLD_SHIFT) > 0 Then
+                shiftVal = MapShift(shiftMap, CStr(blk("shift")))
+            Else
+                shiftVal = ""
+            End If
+            blockKey = NormText(lineVal) & "|" & NormText(shiftVal)
+
+            If splits.Exists(blockKey) Then
+                Set prodList = splits(blockKey)
+
+                ' 既にある品種行と、挿入位置の候補を調べる
+                Set existing = NewDict()
+                lastProdRow = 0: anchorRow = 0: lastItemRow = 0
+                For Each rKey In items.Keys
+                    r = CLng(rKey)
+                    spec = CStr(items(rKey))
+                    If r > lastItemRow Then lastItemRow = r
+                    If Left$(spec, Len(SPLIT_PREFIX)) = SPLIT_PREFIX Then
+                        existing(Mid$(spec, Len(SPLIT_PREFIX) + 1)) = 1
+                        If r > lastProdRow Then lastProdRow = r
+                    End If
+                    If NormText(CellText(ws.Cells(r, 1))) = anchorKey Then anchorRow = r
+                Next rKey
+
+                ' 不足している品種を集める
+                nMissing = 0
+                ReDim missing(1 To prodList.Count)
+                For Each pKey In prodList.Keys
+                    If Not existing.Exists(CStr(pKey)) Then
+                        nMissing = nMissing + 1
+                        missing(nMissing) = CStr(prodList(pKey))
+                    End If
+                Next pKey
+
+                If nMissing > 0 Then
+                    SortNames missing, nMissing
+
+                    pos = lastProdRow
+                    If pos = 0 Then pos = anchorRow
+                    If pos = 0 Then pos = lastItemRow
+
+                    For i = 1 To nMissing
+                        label = missing(i) & PRODUCT_ROW_SUFFIX
+                        ws.Rows(pos + 1).Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+                        ws.Cells(pos + 1, 1).Value = label
+                        pos = pos + 1
+                        added = added + 1
+                    Next i
+                End If
+            End If
+        End If
+    Next bi
+
+    EnsureProductRows = added
+End Function
+
+' 文字列配列の簡易ソート（1〜n）
+Private Sub SortNames(ByRef arr() As String, ByVal n As Long)
+    Dim i As Long, j As Long, tmp As String
+    For i = 1 To n - 1
+        For j = i + 1 To n
+            If StrComp(arr(i), arr(j), vbTextCompare) > 0 Then
+                tmp = arr(i): arr(i) = arr(j): arr(j) = tmp
+            End If
+        Next j
+    Next i
+End Sub
+
 ' 見出し行の日付欄に 1〜月末 を書き込む（日付行も空の新規表向け）
 Private Sub WriteDayHeaders(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal monthDays As Long)
     Dim blk As Object, days As Object, cKey As Variant
@@ -1062,6 +1229,7 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
                              ByVal blocks As Collection, _
                              ByVal recCount As Long, ByVal writeCount As Long, _
                              ByVal skipFormula As Long, ByVal missCount As Long, _
+                             ByVal addedRows As Long, _
                              ByVal unknownLabels As Collection, ByVal emptyBlocks As Collection) As String
     Dim s As String, i As Long, n As Long
 
@@ -1071,6 +1239,7 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
     s = s & "書き込みセル数 : " & writeCount & vbCrLf
     s = s & "該当データなし : " & missCount & " セル" & vbCrLf
     If skipFormula > 0 Then s = s & "数式のためスキップ : " & skipFormula & " セル" & vbCrLf
+    If addedRows > 0 Then s = s & "追加した品種の行 : " & addedRows & " 行" & vbCrLf
 
     If unknownLabels.Count > 0 Then
         s = s & vbCrLf & "※ 対応表(BuildFieldMap)に無い項目名（取り込み対象外）:" & vbCrLf

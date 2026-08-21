@@ -172,6 +172,45 @@ End Sub
 * 該当する列が DB に無い項目は、行ごとコメントアウトしてください（そのセルは触りません）。
 * 「変動値」「直接時間」はシート側の計算式想定のため既定では対象外です。
 
+### 品種ごとの生産数（行の自動追加）
+
+1日・1直の中に品種（背番号／品番）ごとの行があるため、**品種ごとに合計**して
+`〇〇生産数` という行に入れます。**シートに無い品種が出てきた場合は行を自動で追加**します。
+
+```vba
+Private Const SPLIT_ENABLED         As Boolean = True
+Private Const SPLIT_COLUMN          As String = "SEBAN"      ' 品種を表す列
+Private Const SPLIT_VALUE_COLUMN    As String = "KAKO_CNT"   ' 生産数の列
+Private Const PRODUCT_ROW_SUFFIX    As String = "生産数"     ' 行名の末尾
+Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)" ' 追加位置の基準
+Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
+```
+
+動きは次のとおりです。
+
+1. A列が `生産数` で終わる行（`TT生産数`、`825B/TNGA生産数` など）を**品種行**として認識します
+2. DB の品種コードを ⑥ の表示名に変換し、`表示名 + 生産数` の行に合計を書き込みます
+3. その月に出てきた品種の行がシートに無ければ、**`良品数(個)` の下に行を挿入**して作ります
+   （既に品種行がある場合はその直後。書式は上の行から引き継ぎます）
+4. 追加した行数は完了メッセージに表示されます
+
+行を増やしたくない場合は `AUTO_ADD_PRODUCT_ROWS = False`、品種別の集計自体が不要なら
+`SPLIT_ENABLED = False` にしてください。
+
+### ⑥ 品種の表示名（`BuildProductMap`）
+
+DB の品種コードと、シートの行名に使う表示名の対応です。
+
+```vba
+Private Sub BuildProductMap(ByVal m As Object)
+    AddMap m, "TMC300D", "TT"          ' → 「TT生産数」の行に入る
+    AddMap m, "TMC825B", "825B/TNGA"   ' → 「825B/TNGA生産数」の行に入る
+End Sub
+```
+
+登録が無い品種は**コードがそのまま行名**になり（`TMC900X` → `TMC900X生産数`）、
+その行が無ければ自動で追加されます。複数のコードを同じ表示名に登録すれば、まとめて合計されます。
+
 ### ⑤ 値の読み替え（`BuildShiftMap` / `BuildLineMap`）
 
 シートの見出し表記と DB に入っている**値**が違う場合に登録します（カラム名ではなく値です）。
