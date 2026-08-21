@@ -53,7 +53,7 @@ Private Const CONN_STR As String = _
     "Provider=MSDASQL;DSN=DRSUM;UID=USER_ID;PWD=PASSWORD;"
 
 ' æ“¾Œ³ƒe[ƒuƒ‹i‚Ü‚½‚Íƒrƒ…[j–¼  ¦Dr.Sum ‚Í dbo. ‚È‚Ç‚ÌƒXƒL[ƒ}Cü‚Í•t‚¯‚Ü‚¹‚ñ
-Private Const TABLE_NAME As String = "¶YÀÑ"
+Private Const TABLE_NAME As String = "V_G2contlrol"
 
 ' ¯•Êq‚Ìˆø—p•„  Dr.Sum ‚Í•t‚¯‚È‚¢‚Ì‚ª–³“ïi•K—v‚È‚ç " " j
 '   SQL Server / Access = [ ]   Oracle / PostgreSQL = " "   MySQL = ` `
@@ -92,9 +92,9 @@ Private Const CMD_TIMEOUT As Long = 120
 
 '================== ‡A DB‚ÌƒL[—ñ–¼ ==================
 
-Private Const FLD_DATE  As String = "“ú•t"       ' “ú•ti1“ú’PˆÊj
-Private Const FLD_LINE  As String = "İ”õ”Ô†"   ' 8020 / 8021 / 8022 c
-Private Const FLD_SHIFT As String = "’¼‹æ•ª"     ' ’‹ / –é / ƒXƒ‰ƒCƒ_ / ƒeƒŒƒXƒR’‹ c
+Private Const FLD_DATE  As String = "LINE_DATE"   ' “ú•ti1“ú’PˆÊj
+Private Const FLD_LINE  As String = "LINE_CD"     ' İ”õƒR[ƒh
+Private Const FLD_SHIFT As String = "TYOKUKBN"    ' ’¼‹æ•ªi1=’‹ / 2=–éj
 
 ' ’¼‹æ•ª‚ªDB‚É–³‚¢iİ”õ”Ô†‚¾‚¯‚ÅˆêˆÓj‚Ìê‡‚ÍA‰º‚ğ "" ‚É‚µ‚Ä‚­‚¾‚³‚¢B
 ' ‚»‚Ìê‡ƒV[ƒg‘¤‚ÌŒ©o‚µ‚Ìu’‹/–év“™‚Í–³‹‚µ‚Äİ”õ”Ô†‚¾‚¯‚Å“Ë‚«‡‚í‚¹‚Ü‚·B
@@ -103,8 +103,8 @@ Private Const FLD_SHIFT As String = "’¼‹æ•ª"     ' ’‹ / –é / ƒXƒ‰ƒCƒ_ / ƒeƒŒƒXƒR
 '--- ‰Ò“­ŠÔ‚ÌŒvZiDB‚É‰Ò“­ŠÔ‚Ì—ñ‚ª–³‚­AŠJnEI—¹‚©‚ç‹‚ß‚éê‡j-----
 '   ‡C‚Ì BuildFieldMap ‚Å  AddMap m, "‰Ò“­ŠÔ", CALC_DURATION  ‚Æ‘‚­‚ÆA
 '   ‰º‚Ìİ’è‚É‚µ‚½‚ª‚Á‚Ä I—¹ | ŠJn ‚ğŒvZ‚µ‚½’l‚ğ“ü‚ê‚Ü‚·B
-Private Const FLD_START As String = "ŠJn"   ' ŠJn‚ÌƒJƒ‰ƒ€–¼
-Private Const FLD_END   As String = "I—¹"   ' I—¹‚ÌƒJƒ‰ƒ€–¼
+Private Const FLD_START As String = "LINE_START_TIME"   ' ŠJn‚ÌƒJƒ‰ƒ€–¼
+Private Const FLD_END   As String = "LINE_END_TIME"     ' I—¹‚ÌƒJƒ‰ƒ€–¼
 
 ' ‹xŒeŠÔ‚Ì·‚µˆø‚«
 '   FLD_BREAK  : ‹xŒe(•ª)‚ª“ü‚Á‚Ä‚¢‚éƒJƒ‰ƒ€–¼B–³‚¯‚ê‚Î "" ‚É‚·‚é
@@ -166,27 +166,48 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' æ‘O‚É‘ÎÛ—“‚ğƒNƒŠƒ
 ' “¯‚¶ “ú•t~İ”õ~’¼ ‚ÌƒŒƒR[ƒh‚ª•¡”‚ ‚éê‡‚Ìˆµ‚¢  "LAST"(ŒãŸ‚¿) / "SUM"(‡Œv)
 Private Const AGGREGATE_MODE As String = "LAST"
 
+' İ”õƒR[ƒh‚ÌÚ“ª«BBuildLineMap ‚É“o˜^‚ª–³‚¢İ”õ”Ô†‚É©“®‚Å•t‚¯‚Ü‚·B
+'   —á) LINE_CODE_PREFIX = "AS" ‚Ì‚Æ‚«AƒV[ƒg‚Ì 8020 ¨ DB‚Ì "AS8020" ‚ğ’T‚µ‚Ü‚·
+'       •t‚¯‚È‚¢ê‡‚Í "" ‚Ì‚Ü‚Ü‚É‚µ‚Ä‚­‚¾‚³‚¢
+Private Const LINE_CODE_PREFIX As String = ""
+
 ' ‹æ•ªi’‹/–éj‚Ì“Ë‚«‡‚í‚¹‚ÅAŠ®‘Sˆê’v‚µ‚È‚¢‚Æ‚«‚Éu’‹vu–év‚ğŠÜ‚Ş‚©‚Å”»’è‚·‚é
 ' —á: ƒV[ƒguÃÚ½º’‹v¨ BuildShiftMap ‚Ìu’‹v‚Ì•ÏŠ·’l‚ğg‚¤
 Private Const SHIFT_PARTIAL_MATCH As Boolean = True
 
 
 '================== ‡C €–Ú–¼ ¨ DB—ñ–¼ ‚Ì‘Î‰ ==================
-' ¶ : ƒV[ƒgA—ñ‚Ì€–Ú–¼i•\‹L‚ä‚ê‚Í©“®‚Å‹zûB‘SŠp/”¼ŠpE‹ó”’‚Í–³‹‚³‚ê‚Ü‚·j
-' ‰E : DB‚Ì—ñ–¼
+' 1“ú ~ İ”õ ~ ’¼ ‚É‘Î‚µ‚ÄDB‚Ìs‚ª•¡”‚ ‚éi•i”Ô‚²‚Æ‚És‚ª•ª‚©‚ê‚éj‚½‚ßA
+' €–Ú‚²‚Æ‚Éu‚Ç‚Ì—ñ‚ğvu‚Ç‚¤WŒv‚·‚é‚©vu‚Ç‚Ìs‚¾‚¯‘ÎÛ‚É‚·‚é‚©v‚ğw’è‚µ‚Ü‚·B
+'
+'   AddCol m, ƒV[ƒg‚Ì€–Ú–¼, DB‚Ì—ñ–¼, WŒv•û–@, i‚è‚İ—ñ, i‚è‚İ’l
+'
+'     WŒv•û–@ : "SUM"(‡Œv) / "MAX"(Å‘å) / "MIN"(Å¬) / "COUNT"(Œ”)
+'                "LAST"(ÅŒã‚Ìs) / "FIRST"(Å‰‚Ìs)
+'     i‚è‚İ : g‚í‚È‚¢‚È‚ç "" , ""
+'                ’l‚ÍƒJƒ“ƒ}‹æØ‚è‚Å•¡”‰ÂB––”ö * ‚Å‘O•ûˆê’vA‘OŒã * ‚Å•”•ªˆê’v
+'                —á) "TMC300D,TMC301D" / "172100*" / "*TNGA*"
+'
+'   AddMap m, ƒV[ƒg‚Ì€–Ú–¼, DB‚Ì—ñ–¼   c WŒv "LAST"Ai‚è‚İ–³‚µ‚Ì’Z‚¢‘‚«•û
+'   ‰Ò“­ŠÔ‚ğŠJnEI—¹‚©‚çŒvZ‚·‚éê‡‚Í DB‚Ì—ñ–¼‚É CALC_DURATION ‚ğw’è‚µ‚Ü‚·
 Private Sub BuildFieldMap(ByVal m As Object)
-    ' ‰Ò“­ŠÔ‚Í DB ‚É—ñ‚ª–³‚¢‚½‚ßAŠJnEI—¹i‡A‚Ì FLD_START / FLD_ENDj‚©‚çŒvZ‚µ‚Ü‚·B
-    ' DB ‚É‰Ò“­ŠÔ‚Ì—ñ‚ª‚ ‚éê‡‚Í  AddMap m, "‰Ò“­ŠÔ", "—ñ–¼"  ‚É‘‚«Š·‚¦‚Ä‚­‚¾‚³‚¢B
-    AddMap m, "‰Ò“­ŠÔ", CALC_DURATION
-    AddMap m, "—Ç•i”(ŒÂ)", "—Ç•i”"
-    AddMap m, "TT¶Y”", "TT¶Y”"
-    AddMap m, "825B/TNGA¶Y”", "TNGA¶Y”"
-    AddMap m, "Šî€l”(Å¬l”)", "Šî€l”"
+    ' ‰Ò“­ŠÔ : “¯‚¶’¼‚Ìs‚É“¯‚¶’l‚ª“ü‚Á‚Ä‚¢‚é‚½‚ß MAXi‡Œv‚µ‚È‚¢j
+    AddCol m, "‰Ò“­ŠÔ", "WORKING_HOURS", "MAX", "", ""
+    '   ¦ WORKING_HOURS ‚ğg‚í‚¸ŠJnEI—¹‚©‚çŒvZ‚·‚éê‡‚Í‰º‚É·‚µ‘Ö‚¦
+    ' AddCol m, "‰Ò“­ŠÔ", CALC_DURATION, "MAX", "", ""
 
-    ' u•Ï“®’lvu’¼ÚŠÔv‚ÍƒV[ƒg‘¤‚ÌŒvZ®‚Ì‚½‚ßAŠù’è‚Å‚Íæ‚è‚İ‚Ü‚¹‚ñB
-    ' DB‚©‚çæ“¾‚·‚éê‡‚Í‰º‚ÌƒRƒƒ“ƒg‚ğŠO‚µ‚Ä‚­‚¾‚³‚¢B
-    ' AddMap m, "•Ï“®’l", "•Ï“®’l"
-    ' AddMap m, "’¼ÚŠÔ", "’¼ÚŠÔ"
+    ' —Ç•i” : ‚»‚Ì“úE‚»‚Ì’¼‚Ì‘Ss‚Ì‡Œv
+    AddCol m, "—Ç•i”(ŒÂ)", "KAKO_CNT", "SUM", "", ""
+
+    ' TT / 825BETNGA ‚Ì¶Y” : •i”Ô(HINBAN_CD) ‚© ”w”Ô†(SEBAN) ‚ÅU‚è•ª‚¯‚Ä‡Œv
+    '   ¥ ÀÛ‚Ì’l‚É‡‚í‚¹‚Äi‚è‚İ’l‚ğ“ü‚êAƒRƒƒ“ƒg‚ğŠO‚µ‚Ä‚­‚¾‚³‚¢
+    ' AddCol m, "TT¶Y”", "KAKO_CNT", "SUM", "SEBAN", "TMC300D"
+    ' AddCol m, "825B/TNGA¶Y”", "KAKO_CNT", "SUM", "HINBAN_CD", "172100*"
+
+    ' Šî€l”(Å¬l”) : ŠY“–‚·‚é—ñ‚ª‚ ‚ê‚Î’Ç‰Á‚µ‚Ä‚­‚¾‚³‚¢
+    ' AddCol m, "Šî€l”(Å¬l”)", "—ñ–¼", "MAX", "", ""
+
+    ' u•Ï“®’lvu’¼ÚŠÔv‚ÍƒV[ƒg‘¤‚ÌŒvZ®‚Ì‚½‚ßæ‚è‚İ‚Ü‚¹‚ñ
 End Sub
 
 
@@ -662,13 +683,13 @@ End Function
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                            ByVal fieldMap As Object, ByRef recCount As Long) As Object
     Dim cn As Object, rs As Object
-    Dim cols As Object, cache As Object
-    Dim sql As String, k As Variant
+    Dim specs As Object, cache As Object
+    Dim sql As String, k As Variant, spec As String
     Dim lineKey As String, shiftKey As String, keyBase As String, cellKey As String
     Dim dv As Variant, val As Variant
     Dim dayNo As Long
 
-    Set cols = UniqueColumns(fieldMap)
+    Set specs = UniqueSpecs(fieldMap)
     Set cache = NewDict()
     recCount = 0
 
@@ -695,22 +716,16 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
             End If
             keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
 
-            For Each k In cols.Keys
-                If IsCalcColumn(CStr(k)) Then
-                    val = CalcDuration(rs)
-                Else
-                    val = rs.Fields(CStr(k)).Value
-                End If
-                If Not IsNull(val) Then
-                    cellKey = keyBase & CStr(k)
-                    If AGGREGATE_MODE = "SUM" And cache.Exists(cellKey) Then
-                        If IsNumeric(val) And IsNumeric(cache(cellKey)) Then
-                            cache(cellKey) = CDbl(cache(cellKey)) + CDbl(val)
-                        Else
-                            cache(cellKey) = val
-                        End If
+            For Each k In specs.Keys
+                spec = CStr(k)
+                If SpecMatches(spec, rs) Then
+                    If IsCalcColumn(SpecPart(spec, 0)) Then
+                        val = CalcDuration(rs)
                     Else
-                        cache(cellKey) = val
+                        val = rs.Fields(SpecPart(spec, 0)).Value
+                    End If
+                    If Not IsNull(val) Then
+                        Accumulate cache, keyBase & spec, val, SpecPart(spec, 1)
                     End If
                 End If
             Next k
@@ -733,6 +748,58 @@ CleanFail:
     On Error GoTo 0
     Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
 End Function
+
+' WŒv•û–@‚É‚µ‚½‚ª‚Á‚Ä’l‚ğÏ‚İã‚°‚é
+Private Sub Accumulate(ByVal cache As Object, ByVal key As String, ByVal val As Variant, _
+                       ByVal agg As String)
+    Select Case agg
+        Case "SUM"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    cache(key) = CDbl(cache(key)) + CDbl(val)
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "MAX"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    If CDbl(val) > CDbl(cache(key)) Then cache(key) = val
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "MIN"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    If CDbl(val) < CDbl(cache(key)) Then cache(key) = val
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "COUNT"
+            If cache.Exists(key) Then
+                cache(key) = CDbl(cache(key)) + 1
+            Else
+                cache(key) = 1
+            End If
+
+        Case "FIRST"
+            If Not cache.Exists(key) Then cache(key) = val
+
+        Case Else       ' LAST
+            cache(key) = val
+    End Select
+End Sub
 
 ' ƒRƒ}ƒ“ƒh‚ğ‘g‚İ—§‚Ä‚ÄÀs‚µAƒŒƒR[ƒhƒZƒbƒg‚ğ•Ô‚·
 Private Function ExecuteQuery(ByVal cn As Object, ByVal sql As String, _
@@ -773,7 +840,7 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
         Exit Function
     End If
 
-    Set cols = UniqueColumns(fieldMap)
+    Set cols = CollectColumns(fieldMap)
     Set sel = NewDict()
 
     AddSelect sel, FLD_DATE
@@ -781,7 +848,7 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
     AddSelect sel, FLD_SHIFT
 
     For Each k In cols.Keys
-        If Not IsCalcColumn(CStr(k)) Then AddSelect sel, CStr(k)
+        AddSelect sel, CStr(k)
     Next k
 
     ' ‰Ò“­ŠÔ‚ğŒvZ‚·‚éê‡‚ÍAŠJnEI—¹i‚Æ‹xŒej‚àæ“¾‚·‚é
@@ -818,7 +885,7 @@ End Function
 Private Function UsesCalcDuration(ByVal fieldMap As Object) As Boolean
     Dim k As Variant
     For Each k In fieldMap.Keys
-        If CStr(fieldMap(k)) = CALC_DURATION Then
+        If IsCalcColumn(SpecPart(CStr(fieldMap(k)), 0)) Then
             UsesCalcDuration = True
             Exit Function
         End If
@@ -845,14 +912,28 @@ Private Function DateLiteral(ByVal d As Date) As String
     DateLiteral = Replace(DATE_LITERAL_TEMPLATE, "<DATE>", Format$(d, DATE_FORMAT))
 End Function
 
-' æ“¾‚ª•K—v‚ÈDB—ñid•¡œ‹j
-Private Function UniqueColumns(ByVal fieldMap As Object) As Object
-    Dim cols As Object, k As Variant
+' æ“¾‚ª•K—v‚ÈDB—ñiƒf[ƒ^—ñ{i‚è‚İ—ñBŒvZ—p‚Ì‹^——ñ‚Íœ‚­j
+Private Function CollectColumns(ByVal fieldMap As Object) As Object
+    Dim cols As Object, k As Variant, spec As String
     Set cols = NewDict()
     For Each k In fieldMap.Keys
-        cols(CStr(fieldMap(k))) = 1
+        spec = CStr(fieldMap(k))
+        If Not IsCalcColumn(SpecPart(spec, 0)) Then
+            If Len(SpecPart(spec, 0)) > 0 Then cols(SpecPart(spec, 0)) = 1
+        End If
+        If Len(SpecPart(spec, 2)) > 0 Then cols(SpecPart(spec, 2)) = 1
     Next k
-    Set UniqueColumns = cols
+    Set CollectColumns = cols
+End Function
+
+' €–Ú‚²‚Æ‚Ìd—lid•¡œ‹j
+Private Function UniqueSpecs(ByVal fieldMap As Object) As Object
+    Dim specs As Object, k As Variant
+    Set specs = NewDict()
+    For Each k In fieldMap.Keys
+        specs(CStr(fieldMap(k))) = 1
+    Next k
+    Set UniqueSpecs = specs
 End Function
 
 Private Function Q(ByVal name As String) As String
@@ -882,7 +963,7 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
         Set items = blk("items")
         Set days = blk("days")
         If items.Count > 0 Then
-            lineVal = MapValue(lineMap, CStr(blk("line")))
+            lineVal = MapLine(lineMap, CStr(blk("line")))
             If Len(FLD_SHIFT) > 0 Then
                 shiftVal = MapShift(shiftMap, CStr(blk("shift")))
             Else
@@ -1091,9 +1172,67 @@ Private Function NewDict() As Object
     Set NewDict = CreateObject("Scripting.Dictionary")
 End Function
 
+' ’Z‚¢‘‚«•ûiWŒv‚Í AGGREGATE_MODEAi‚è‚İ–³‚µj
 Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
-    m(NormText(sheetLabel)) = dbName
+    AddCol m, sheetLabel, dbName, AGGREGATE_MODE, "", ""
 End Sub
+
+' WŒv•û–@Ei‚è‚İ•t‚«‚Å“o˜^‚·‚é
+Private Sub AddCol(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String, _
+                   ByVal aggregate As String, ByVal filterCol As String, ByVal filterValues As String)
+    m(NormText(sheetLabel)) = dbName & vbTab & UCase$(Trim$(aggregate)) & vbTab & _
+                              filterCol & vbTab & filterValues
+End Sub
+
+' d—l•¶š—ñ‚Ìæ‚èo‚µ  0=—ñ–¼ 1=WŒv 2=i‚è‚İ—ñ 3=i‚è‚İ’l
+Private Function SpecPart(ByVal spec As String, ByVal index As Long) As String
+    Dim parts() As String
+    parts = Split(spec, vbTab)
+    If index <= UBound(parts) Then SpecPart = parts(index)
+End Function
+
+' i‚è‚İğŒ‚É‡‚¤s‚©
+Private Function SpecMatches(ByVal spec As String, ByVal rs As Object) As Boolean
+    Dim col As String, vals As String, v As String
+    Dim list() As String, i As Long, pat As String
+
+    col = SpecPart(spec, 2)
+    vals = SpecPart(spec, 3)
+    If Len(col) = 0 Or Len(vals) = 0 Then
+        SpecMatches = True
+        Exit Function
+    End If
+
+    v = NormText(NzStr(rs.Fields(col).Value))
+    list = Split(vals, ",")
+    For i = LBound(list) To UBound(list)
+        pat = NormText(list(i))
+        If Len(pat) > 0 Then
+            If Left$(pat, 1) = "*" And Right$(pat, 1) = "*" And Len(pat) > 2 Then
+                If InStr(1, v, Mid$(pat, 2, Len(pat) - 2), vbTextCompare) > 0 Then SpecMatches = True: Exit Function
+            ElseIf Right$(pat, 1) = "*" Then
+                If StrComp(Left$(v, Len(pat) - 1), Left$(pat, Len(pat) - 1), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            ElseIf Left$(pat, 1) = "*" Then
+                If StrComp(Right$(v, Len(pat) - 1), Mid$(pat, 2), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            Else
+                If StrComp(v, pat, vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            End If
+        End If
+    Next i
+End Function
+
+' İ”õ”Ô†‚Ì•ÏŠ·i“o˜^‚ª‚ ‚ê‚Î‚»‚êA–³‚¯‚ê‚ÎÚ“ª«‚ğ•t‚¯‚éj
+Private Function MapLine(ByVal m As Object, ByVal key As String) As String
+    Dim k As String
+    k = NormText(key)
+    If m.Exists(k) Then
+        MapLine = CStr(m(k))
+    ElseIf Len(LINE_CODE_PREFIX) > 0 Then
+        MapLine = LINE_CODE_PREFIX & key
+    Else
+        MapLine = key
+    End If
+End Function
 
 ' ‹æ•ª‚Ì•ÏŠ·iŠ®‘Sˆê’v ¨ •”•ªˆê’v ¨ ‚»‚Ì‚Ü‚Üj
 Private Function MapShift(ByVal m As Object, ByVal key As String) As String
@@ -1218,6 +1357,18 @@ Private Function ParseTimeMinutes(ByVal v As Variant) As Double
     End If
 
     t = NormText(CStr(v))
+
+    ' "2022-06-01T08:30:00.000+0900" ‚Ì‚æ‚¤‚É ':' ‚ğŠÜ‚Şê‡‚ÍÅ‰‚Ì ':' ‚Ì‘OŒã‚ğ•ª‚Æ‚İ‚È‚·
+    i = InStr(t, ":")
+    If i >= 3 Then
+        If IsNumeric(Mid$(t, i - 2, 2)) And IsNumeric(Mid$(t, i + 1, 2)) Then
+            h = CLng(Mid$(t, i - 2, 2))
+            mi = CLng(Mid$(t, i + 1, 2))
+            If h <= 24 And mi <= 59 Then ParseTimeMinutes = h * 60 + mi
+            Exit Function
+        End If
+    End If
+
     For i = 1 To Len(t)
         ch = Mid$(t, i, 1)
         If ch >= "0" And ch <= "9" Then digits = digits & ch

@@ -53,7 +53,7 @@ Private Const CONN_STR As String = _
     "Provider=MSDASQL;DSN=DRSUM;UID=USER_ID;PWD=PASSWORD;"
 
 ' 取得元テーブル（またはビュー）名  ※Dr.Sum は dbo. などのスキーマ修飾は付けません
-Private Const TABLE_NAME As String = "生産実績"
+Private Const TABLE_NAME As String = "V_G2contlrol"
 
 ' 識別子の引用符  Dr.Sum は付けないのが無難（必要なら " " ）
 '   SQL Server / Access = [ ]   Oracle / PostgreSQL = " "   MySQL = ` `
@@ -92,9 +92,9 @@ Private Const CMD_TIMEOUT As Long = 120
 
 '================== ② DBのキー列名 ==================
 
-Private Const FLD_DATE  As String = "日付"       ' 日付（1日単位）
-Private Const FLD_LINE  As String = "設備番号"   ' 8020 / 8021 / 8022 …
-Private Const FLD_SHIFT As String = "直区分"     ' 昼 / 夜 / スライダ / テレスコ昼 …
+Private Const FLD_DATE  As String = "LINE_DATE"   ' 日付（1日単位）
+Private Const FLD_LINE  As String = "LINE_CD"     ' 設備コード
+Private Const FLD_SHIFT As String = "TYOKUKBN"    ' 直区分（1=昼 / 2=夜）
 
 ' 直区分がDBに無い（設備番号だけで一意）の場合は、下を "" にしてください。
 ' その場合シート側の見出しの「昼/夜」等は無視して設備番号だけで突き合わせます。
@@ -103,8 +103,8 @@ Private Const FLD_SHIFT As String = "直区分"     ' 昼 / 夜 / スライダ /
 '--- 稼働時間の計算（DBに稼働時間の列が無く、開始・終了から求める場合）-----
 '   ④の BuildFieldMap で  AddMap m, "稼働時間", CALC_DURATION  と書くと、
 '   下の設定にしたがって 終了 − 開始 を計算した値を入れます。
-Private Const FLD_START As String = "開始時刻"   ' 開始のカラム名
-Private Const FLD_END   As String = "終了時刻"   ' 終了のカラム名
+Private Const FLD_START As String = "LINE_START_TIME"   ' 開始のカラム名
+Private Const FLD_END   As String = "LINE_END_TIME"     ' 終了のカラム名
 
 ' 休憩時間の差し引き
 '   FLD_BREAK  : 休憩(分)が入っているカラム名。無ければ "" にする
@@ -166,27 +166,48 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄
 ' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
 Private Const AGGREGATE_MODE As String = "LAST"
 
+' 設備コードの接頭辞。BuildLineMap に登録が無い設備番号に自動で付けます。
+'   例) LINE_CODE_PREFIX = "AS" のとき、シートの 8020 → DBの "AS8020" を探します
+'       付けない場合は "" のままにしてください
+Private Const LINE_CODE_PREFIX As String = ""
+
 ' 区分（昼/夜）の突き合わせで、完全一致しないときに「昼」「夜」を含むかで判定する
 ' 例: シート「ﾃﾚｽｺ昼」→ BuildShiftMap の「昼」の変換値を使う
 Private Const SHIFT_PARTIAL_MATCH As Boolean = True
 
 
 '================== ④ 項目名 → DB列名 の対応 ==================
-' 左 : シートA列の項目名（表記ゆれは自動で吸収。全角/半角・空白は無視されます）
-' 右 : DBの列名
+' 1日 × 設備 × 直 に対してDBの行が複数ある（品番ごとに行が分かれる）ため、
+' 項目ごとに「どの列を」「どう集計するか」「どの行だけ対象にするか」を指定します。
+'
+'   AddCol m, シートの項目名, DBの列名, 集計方法, 絞り込み列, 絞り込み値
+'
+'     集計方法 : "SUM"(合計) / "MAX"(最大) / "MIN"(最小) / "COUNT"(件数)
+'                "LAST"(最後の行) / "FIRST"(最初の行)
+'     絞り込み : 使わないなら "" , ""
+'                値はカンマ区切りで複数可。末尾 * で前方一致、前後 * で部分一致
+'                例) "TMC300D,TMC301D" / "172100*" / "*TNGA*"
+'
+'   AddMap m, シートの項目名, DBの列名   … 集計 "LAST"、絞り込み無しの短い書き方
+'   稼働時間を開始・終了から計算する場合は DBの列名に CALC_DURATION を指定します
 Private Sub BuildFieldMap(ByVal m As Object)
-    ' 稼働時間は DB に列が無いため、開始・終了（②の FLD_START / FLD_END）から計算します。
-    ' DB に稼働時間の列がある場合は  AddMap m, "稼働時間", "列名"  に書き換えてください。
-    AddMap m, "稼働時間", CALC_DURATION
-    AddMap m, "良品数(個)", "良品数"
-    AddMap m, "TT生産数", "TT生産数"
-    AddMap m, "825B/TNGA生産数", "TNGA生産数"
-    AddMap m, "基準人数(最小人数)", "基準人数"
+    ' 稼働時間 : 同じ直の行に同じ値が入っているため MAX（合計しない）
+    AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
+    '   ※ WORKING_HOURS を使わず開始・終了から計算する場合は下に差し替え
+    ' AddCol m, "稼働時間", CALC_DURATION, "MAX", "", ""
 
-    ' 「変動値」「直接時間」はシート側の計算式のため、既定では取り込みません。
-    ' DBから取得する場合は下のコメントを外してください。
-    ' AddMap m, "変動値", "変動値"
-    ' AddMap m, "直接時間", "直接時間"
+    ' 良品数 : その日・その直の全行の合計
+    AddCol m, "良品数(個)", "KAKO_CNT", "SUM", "", ""
+
+    ' TT / 825B・TNGA の生産数 : 品番(HINBAN_CD) か 背番号(SEBAN) で振り分けて合計
+    '   ▼ 実際の値に合わせて絞り込み値を入れ、コメントを外してください
+    ' AddCol m, "TT生産数", "KAKO_CNT", "SUM", "SEBAN", "TMC300D"
+    ' AddCol m, "825B/TNGA生産数", "KAKO_CNT", "SUM", "HINBAN_CD", "172100*"
+
+    ' 基準人数(最小人数) : 該当する列があれば追加してください
+    ' AddCol m, "基準人数(最小人数)", "列名", "MAX", "", ""
+
+    ' 「変動値」「直接時間」はシート側の計算式のため取り込みません
 End Sub
 
 
@@ -662,13 +683,13 @@ End Function
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                            ByVal fieldMap As Object, ByRef recCount As Long) As Object
     Dim cn As Object, rs As Object
-    Dim cols As Object, cache As Object
-    Dim sql As String, k As Variant
+    Dim specs As Object, cache As Object
+    Dim sql As String, k As Variant, spec As String
     Dim lineKey As String, shiftKey As String, keyBase As String, cellKey As String
     Dim dv As Variant, val As Variant
     Dim dayNo As Long
 
-    Set cols = UniqueColumns(fieldMap)
+    Set specs = UniqueSpecs(fieldMap)
     Set cache = NewDict()
     recCount = 0
 
@@ -695,22 +716,16 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
             End If
             keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
 
-            For Each k In cols.Keys
-                If IsCalcColumn(CStr(k)) Then
-                    val = CalcDuration(rs)
-                Else
-                    val = rs.Fields(CStr(k)).Value
-                End If
-                If Not IsNull(val) Then
-                    cellKey = keyBase & CStr(k)
-                    If AGGREGATE_MODE = "SUM" And cache.Exists(cellKey) Then
-                        If IsNumeric(val) And IsNumeric(cache(cellKey)) Then
-                            cache(cellKey) = CDbl(cache(cellKey)) + CDbl(val)
-                        Else
-                            cache(cellKey) = val
-                        End If
+            For Each k In specs.Keys
+                spec = CStr(k)
+                If SpecMatches(spec, rs) Then
+                    If IsCalcColumn(SpecPart(spec, 0)) Then
+                        val = CalcDuration(rs)
                     Else
-                        cache(cellKey) = val
+                        val = rs.Fields(SpecPart(spec, 0)).Value
+                    End If
+                    If Not IsNull(val) Then
+                        Accumulate cache, keyBase & spec, val, SpecPart(spec, 1)
                     End If
                 End If
             Next k
@@ -733,6 +748,58 @@ CleanFail:
     On Error GoTo 0
     Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
 End Function
+
+' 集計方法にしたがって値を積み上げる
+Private Sub Accumulate(ByVal cache As Object, ByVal key As String, ByVal val As Variant, _
+                       ByVal agg As String)
+    Select Case agg
+        Case "SUM"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    cache(key) = CDbl(cache(key)) + CDbl(val)
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "MAX"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    If CDbl(val) > CDbl(cache(key)) Then cache(key) = val
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "MIN"
+            If cache.Exists(key) Then
+                If IsNumeric(val) And IsNumeric(cache(key)) Then
+                    If CDbl(val) < CDbl(cache(key)) Then cache(key) = val
+                Else
+                    cache(key) = val
+                End If
+            Else
+                cache(key) = val
+            End If
+
+        Case "COUNT"
+            If cache.Exists(key) Then
+                cache(key) = CDbl(cache(key)) + 1
+            Else
+                cache(key) = 1
+            End If
+
+        Case "FIRST"
+            If Not cache.Exists(key) Then cache(key) = val
+
+        Case Else       ' LAST
+            cache(key) = val
+    End Select
+End Sub
 
 ' コマンドを組み立てて実行し、レコードセットを返す
 Private Function ExecuteQuery(ByVal cn As Object, ByVal sql As String, _
@@ -773,7 +840,7 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
         Exit Function
     End If
 
-    Set cols = UniqueColumns(fieldMap)
+    Set cols = CollectColumns(fieldMap)
     Set sel = NewDict()
 
     AddSelect sel, FLD_DATE
@@ -781,7 +848,7 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
     AddSelect sel, FLD_SHIFT
 
     For Each k In cols.Keys
-        If Not IsCalcColumn(CStr(k)) Then AddSelect sel, CStr(k)
+        AddSelect sel, CStr(k)
     Next k
 
     ' 稼働時間を計算する場合は、開始・終了（と休憩）も取得する
@@ -818,7 +885,7 @@ End Function
 Private Function UsesCalcDuration(ByVal fieldMap As Object) As Boolean
     Dim k As Variant
     For Each k In fieldMap.Keys
-        If CStr(fieldMap(k)) = CALC_DURATION Then
+        If IsCalcColumn(SpecPart(CStr(fieldMap(k)), 0)) Then
             UsesCalcDuration = True
             Exit Function
         End If
@@ -845,14 +912,28 @@ Private Function DateLiteral(ByVal d As Date) As String
     DateLiteral = Replace(DATE_LITERAL_TEMPLATE, "<DATE>", Format$(d, DATE_FORMAT))
 End Function
 
-' 取得が必要なDB列（重複除去）
-Private Function UniqueColumns(ByVal fieldMap As Object) As Object
-    Dim cols As Object, k As Variant
+' 取得が必要なDB列（データ列＋絞り込み列。計算用の疑似列は除く）
+Private Function CollectColumns(ByVal fieldMap As Object) As Object
+    Dim cols As Object, k As Variant, spec As String
     Set cols = NewDict()
     For Each k In fieldMap.Keys
-        cols(CStr(fieldMap(k))) = 1
+        spec = CStr(fieldMap(k))
+        If Not IsCalcColumn(SpecPart(spec, 0)) Then
+            If Len(SpecPart(spec, 0)) > 0 Then cols(SpecPart(spec, 0)) = 1
+        End If
+        If Len(SpecPart(spec, 2)) > 0 Then cols(SpecPart(spec, 2)) = 1
     Next k
-    Set UniqueColumns = cols
+    Set CollectColumns = cols
+End Function
+
+' 項目ごとの仕様（重複除去）
+Private Function UniqueSpecs(ByVal fieldMap As Object) As Object
+    Dim specs As Object, k As Variant
+    Set specs = NewDict()
+    For Each k In fieldMap.Keys
+        specs(CStr(fieldMap(k))) = 1
+    Next k
+    Set UniqueSpecs = specs
 End Function
 
 Private Function Q(ByVal name As String) As String
@@ -882,7 +963,7 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
         Set items = blk("items")
         Set days = blk("days")
         If items.Count > 0 Then
-            lineVal = MapValue(lineMap, CStr(blk("line")))
+            lineVal = MapLine(lineMap, CStr(blk("line")))
             If Len(FLD_SHIFT) > 0 Then
                 shiftVal = MapShift(shiftMap, CStr(blk("shift")))
             Else
@@ -1091,9 +1172,67 @@ Private Function NewDict() As Object
     Set NewDict = CreateObject("Scripting.Dictionary")
 End Function
 
+' 短い書き方（集計は AGGREGATE_MODE、絞り込み無し）
 Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
-    m(NormText(sheetLabel)) = dbName
+    AddCol m, sheetLabel, dbName, AGGREGATE_MODE, "", ""
 End Sub
+
+' 集計方法・絞り込み付きで登録する
+Private Sub AddCol(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String, _
+                   ByVal aggregate As String, ByVal filterCol As String, ByVal filterValues As String)
+    m(NormText(sheetLabel)) = dbName & vbTab & UCase$(Trim$(aggregate)) & vbTab & _
+                              filterCol & vbTab & filterValues
+End Sub
+
+' 仕様文字列の取り出し  0=列名 1=集計 2=絞り込み列 3=絞り込み値
+Private Function SpecPart(ByVal spec As String, ByVal index As Long) As String
+    Dim parts() As String
+    parts = Split(spec, vbTab)
+    If index <= UBound(parts) Then SpecPart = parts(index)
+End Function
+
+' 絞り込み条件に合う行か
+Private Function SpecMatches(ByVal spec As String, ByVal rs As Object) As Boolean
+    Dim col As String, vals As String, v As String
+    Dim list() As String, i As Long, pat As String
+
+    col = SpecPart(spec, 2)
+    vals = SpecPart(spec, 3)
+    If Len(col) = 0 Or Len(vals) = 0 Then
+        SpecMatches = True
+        Exit Function
+    End If
+
+    v = NormText(NzStr(rs.Fields(col).Value))
+    list = Split(vals, ",")
+    For i = LBound(list) To UBound(list)
+        pat = NormText(list(i))
+        If Len(pat) > 0 Then
+            If Left$(pat, 1) = "*" And Right$(pat, 1) = "*" And Len(pat) > 2 Then
+                If InStr(1, v, Mid$(pat, 2, Len(pat) - 2), vbTextCompare) > 0 Then SpecMatches = True: Exit Function
+            ElseIf Right$(pat, 1) = "*" Then
+                If StrComp(Left$(v, Len(pat) - 1), Left$(pat, Len(pat) - 1), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            ElseIf Left$(pat, 1) = "*" Then
+                If StrComp(Right$(v, Len(pat) - 1), Mid$(pat, 2), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            Else
+                If StrComp(v, pat, vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+            End If
+        End If
+    Next i
+End Function
+
+' 設備番号の変換（登録があればそれ、無ければ接頭辞を付ける）
+Private Function MapLine(ByVal m As Object, ByVal key As String) As String
+    Dim k As String
+    k = NormText(key)
+    If m.Exists(k) Then
+        MapLine = CStr(m(k))
+    ElseIf Len(LINE_CODE_PREFIX) > 0 Then
+        MapLine = LINE_CODE_PREFIX & key
+    Else
+        MapLine = key
+    End If
+End Function
 
 ' 区分の変換（完全一致 → 部分一致 → そのまま）
 Private Function MapShift(ByVal m As Object, ByVal key As String) As String
@@ -1218,6 +1357,18 @@ Private Function ParseTimeMinutes(ByVal v As Variant) As Double
     End If
 
     t = NormText(CStr(v))
+
+    ' "2022-06-01T08:30:00.000+0900" のように ':' を含む場合は最初の ':' の前後を時分とみなす
+    i = InStr(t, ":")
+    If i >= 3 Then
+        If IsNumeric(Mid$(t, i - 2, 2)) And IsNumeric(Mid$(t, i + 1, 2)) Then
+            h = CLng(Mid$(t, i - 2, 2))
+            mi = CLng(Mid$(t, i + 1, 2))
+            If h <= 24 And mi <= 59 Then ParseTimeMinutes = h * 60 + mi
+            Exit Function
+        End If
+    End If
+
     For i = 1 To Len(t)
         ch = Mid$(t, i, 1)
         If ch >= "0" And ch <= "9" Then digits = digits & ch
