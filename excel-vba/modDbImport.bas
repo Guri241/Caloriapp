@@ -283,7 +283,7 @@ Public Sub ImportFromDb()
     Dim dFrom As Date, dTo As Date
     Dim recCount As Long, writeCount As Long, skipFormula As Long, missCount As Long
     Dim monthDays As Long
-    Dim eNum As Long, eDesc As String
+    Dim errNum As Long, errDesc As String
     Dim calcMode As XlCalculation
     Dim restored As Boolean
 
@@ -348,7 +348,7 @@ Public Sub ImportFromDb()
     Exit Sub
 
 ErrHandler:
-    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
+    errNum = Err.Number: errDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     If Not restored Then
         On Error Resume Next
         Application.Calculation = xlCalculationAutomatic
@@ -356,7 +356,7 @@ ErrHandler:
         On Error GoTo 0
     End If
     MsgBox "取り込みに失敗しました。" & vbCrLf & vbCrLf & _
-           "エラー " & eNum & " : " & eDesc, vbCritical, "DB取り込み"
+           "エラー " & errNum & " : " & errDesc, vbCritical, "DB取り込み"
 End Sub
 
 '------------------------------------------------------------------
@@ -386,7 +386,7 @@ Public Sub ShowColumns()
 
     Dim cn As Object, rs As Object
     Dim msg As String, i As Long
-    Dim eNum As Long, eDesc As String
+    Dim errNum As Long, errDesc As String
 
     On Error GoTo ErrHandler
 
@@ -415,12 +415,12 @@ Public Sub ShowColumns()
     Exit Sub
 
 ErrHandler:
-    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
+    errNum = Err.Number: errDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     On Error Resume Next
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    MsgBox "エラー " & eNum & " : " & eDesc & vbCrLf & vbCrLf & _
+    MsgBox "エラー " & errNum & " : " & errDesc & vbCrLf & vbCrLf & _
            "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & _
            "TABLE_NAME（" & TABLE_NAME & "）が正しいか確認してください。", vbCritical, "列一覧"
 End Sub
@@ -448,7 +448,7 @@ Public Sub TestQuery()
     Dim sql As String, msg As String, body As String, stage As String
     Dim dFrom As Date, dTo As Date
     Dim n As Long, i As Long
-    Dim eNum As Long, eDesc As String
+    Dim errNum As Long, errDesc As String
 
     On Error GoTo ErrHandler
 
@@ -495,15 +495,15 @@ Public Sub TestQuery()
     Exit Sub
 
 ErrHandler:
-    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
+    errNum = Err.Number: errDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     On Error Resume Next
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
 
     msg = "【" & stage & "】でエラーが発生しました。" & vbCrLf & vbCrLf
-    msg = msg & "エラー " & eNum & " : " & eDesc & vbCrLf & vbCrLf
-    If eNum = 0 And Len(eDesc) = 0 Then
+    msg = msg & "エラー " & errNum & " : " & errDesc & vbCrLf & vbCrLf
+    If errNum = 0 And Len(errDesc) = 0 Then
         msg = msg & "（エラー内容が取得できませんでした。VBEの「ツール → オプション → 全般」で" & vbCrLf & _
                     "　「エラー トラップ = エラー発生時に中断」にして再実行すると、" & vbCrLf & _
                     "　止まった行が特定できます）" & vbCrLf & vbCrLf
@@ -817,13 +817,13 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
     Exit Function
 
 CleanFail:
-    Dim eNum As Long, eDesc As String
-    eNum = Err.Number: eDesc = Err.Description
+    Dim errNum As Long, errDesc As String
+    errNum = Err.Number: errDesc = Err.Description
     On Error Resume Next
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
+    Err.Raise errNum, , errDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
 End Function
 
 ' 集計方法にしたがって値を積み上げる
@@ -948,14 +948,14 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
 End Function
 
 ' SELECT に列を追加（空文字と重複は無視）
-Private Sub AddSelect(ByVal sel As Object, ByVal name As String)
-    If Len(name) = 0 Then Exit Sub
-    If Not sel.Exists(name) Then sel(name) = 1
+Private Sub AddSelect(ByVal sel As Object, ByVal colName As String)
+    If Len(colName) = 0 Then Exit Sub
+    If Not sel.Exists(colName) Then sel(colName) = 1
 End Sub
 
 ' 計算で求める疑似列か
-Private Function IsCalcColumn(ByVal name As String) As Boolean
-    IsCalcColumn = (name = CALC_DURATION)
+Private Function IsCalcColumn(ByVal colName As String) As Boolean
+    IsCalcColumn = (colName = CALC_DURATION)
 End Function
 
 ' 項目対応の中で稼働時間の計算を使っているか
@@ -1019,11 +1019,11 @@ Private Function UniqueSpecs(ByVal fieldMap As Object) As Object
     Set UniqueSpecs = specs
 End Function
 
-Private Function Q(ByVal name As String) As String
+Private Function Q(ByVal colName As String) As String
     If Len(QUOTE_OPEN) = 0 Then
-        Q = name
+        Q = colName
     Else
-        Q = QUOTE_OPEN & name & QUOTE_CLOSE
+        Q = QUOTE_OPEN & colName & QUOTE_CLOSE
     End If
 End Function
 
