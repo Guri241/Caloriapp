@@ -181,9 +181,9 @@ Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True      ' –³‚¢•iŽí‚Ìs‚ðŽ©“®‚
 Private Const SPLIT_PREFIX        As String = "<•iŽí>"     ' “à•”ˆ——pi•ÏX•s—vj
 
 ' Ý”õƒR[ƒh‚ÌÚ“ªŽ«BBuildLineMap ‚É“o˜^‚ª–³‚¢Ý”õ”Ô†‚ÉŽ©“®‚Å•t‚¯‚Ü‚·B
-'   —á) LINE_CODE_PREFIX = "AS" ‚Ì‚Æ‚«AƒV[ƒg‚Ì 8020 ¨ DB‚Ì "AS8020" ‚ð’T‚µ‚Ü‚·
-'       •t‚¯‚È‚¢ê‡‚Í "" ‚Ì‚Ü‚Ü‚É‚µ‚Ä‚­‚¾‚³‚¢
-Private Const LINE_CODE_PREFIX As String = ""
+'   Šù’è‚Ì "AS" ‚ÅAƒV[ƒg‚Ì 8020 ¨ DB‚Ì LINE_CD "AS8020" ‚ð’T‚µ‚Ü‚·
+'       Ú“ªŽ«‚ð•t‚¯‚È‚¢ê‡‚Í "" ‚É‚µ‚Ä‚­‚¾‚³‚¢
+Private Const LINE_CODE_PREFIX As String = "AS"
 
 ' ‹æ•ªi’‹/–éj‚Ì“Ë‚«‡‚í‚¹‚ÅAŠ®‘Sˆê’v‚µ‚È‚¢‚Æ‚«‚Éu’‹vu–év‚ðŠÜ‚Þ‚©‚Å”»’è‚·‚é
 ' —á: ƒV[ƒguÃÚ½º’‹v¨ BuildShiftMap ‚Ìu’‹v‚Ì•ÏŠ·’l‚ðŽg‚¤

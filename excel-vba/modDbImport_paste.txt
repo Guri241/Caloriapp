@@ -183,9 +183,9 @@ Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True      ' 無い品種の行�
 Private Const SPLIT_PREFIX        As String = "<品種>"     ' 内部処理用（変更不要）
 
 ' 設備コードの接頭辞。BuildLineMap に登録が無い設備番号に自動で付けます。
-'   例) LINE_CODE_PREFIX = "AS" のとき、シートの 8020 → DBの "AS8020" を探します
-'       付けない場合は "" のままにしてください
-Private Const LINE_CODE_PREFIX As String = ""
+'   既定の "AS" で、シートの 8020 → DBの LINE_CD "AS8020" を探します
+'       接頭辞を付けない場合は "" にしてください
+Private Const LINE_CODE_PREFIX As String = "AS"
 
 ' 区分（昼/夜）の突き合わせで、完全一致しないときに「昼」「夜」を含むかで判定する
 ' 例: シート「ﾃﾚｽｺ昼」→ BuildShiftMap の「昼」の変換値を使う
