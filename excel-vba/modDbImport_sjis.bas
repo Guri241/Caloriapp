@@ -231,6 +231,7 @@ Public Sub ImportFromDb()
     Dim dFrom As Date, dTo As Date
     Dim recCount As Long, writeCount As Long, skipFormula As Long, missCount As Long
     Dim monthDays As Long
+    Dim eNum As Long, eDesc As String
     Dim calcMode As XlCalculation
     Dim restored As Boolean
 
@@ -287,6 +288,7 @@ Public Sub ImportFromDb()
     Exit Sub
 
 ErrHandler:
+    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     If Not restored Then
         On Error Resume Next
         Application.Calculation = xlCalculationAutomatic
@@ -294,7 +296,7 @@ ErrHandler:
         On Error GoTo 0
     End If
     MsgBox "取り込みに失敗しました。" & vbCrLf & vbCrLf & _
-           "エラー " & Err.Number & " : " & Err.Description, vbCritical, "DB取り込み"
+           "エラー " & eNum & " : " & eDesc, vbCritical, "DB取り込み"
 End Sub
 
 '------------------------------------------------------------------
@@ -310,7 +312,8 @@ Public Sub TestConnection()
     Exit Sub
 ErrHandler:
     MsgBox "接続に失敗しました。" & vbCrLf & vbCrLf & _
-           "エラー " & Err.Number & " : " & Err.Description, vbCritical, "接続テスト"
+           "エラー " & Err.Number & " : " & Err.Description & vbCrLf & vbCrLf & _
+           "接続文字列 : " & MaskPassword(CONN_STR), vbCritical, "接続テスト"
 End Sub
 
 '------------------------------------------------------------------
@@ -323,6 +326,7 @@ Public Sub ShowColumns()
 
     Dim cn As Object, rs As Object
     Dim msg As String, i As Long
+    Dim eNum As Long, eDesc As String
 
     On Error GoTo ErrHandler
 
@@ -351,11 +355,13 @@ Public Sub ShowColumns()
     Exit Sub
 
 ErrHandler:
+    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     On Error Resume Next
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    MsgBox "エラー " & Err.Number & " : " & Err.Description & vbCrLf & vbCrLf & _
+    MsgBox "エラー " & eNum & " : " & eDesc & vbCrLf & vbCrLf & _
+           "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & _
            "TABLE_NAME（" & TABLE_NAME & "）が正しいか確認してください。", vbCritical, "列一覧"
 End Sub
 
@@ -379,20 +385,27 @@ Public Sub TestQuery()
     Const MAX_ROWS As Long = 5000
 
     Dim fieldMap As Object, cn As Object, rs As Object
-    Dim sql As String, msg As String, body As String
+    Dim sql As String, msg As String, body As String, stage As String
     Dim dFrom As Date, dTo As Date
     Dim n As Long, i As Long
+    Dim eNum As Long, eDesc As String
 
     On Error GoTo ErrHandler
 
+    stage = "設定の読み取り（年月セル・項目対応）"
     Set fieldMap = NewDict(): BuildFieldMap fieldMap
     GetPeriod dFrom, dTo
     sql = BuildSql(fieldMap)
 
+    stage = "DBへの接続"
     Set cn = CreateObject("ADODB.Connection")
     cn.CommandTimeout = CMD_TIMEOUT
     cn.Open CONN_STR
+
+    stage = "SQLの実行"
     Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+
+    stage = "データの読み取り"
 
     Do Until rs.EOF
         n = n + 1
@@ -422,12 +435,37 @@ Public Sub TestQuery()
     Exit Sub
 
 ErrHandler:
+    eNum = Err.Number: eDesc = Err.Description      ' ← 先に退避（On Error で消えるため）
     On Error Resume Next
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    MsgBox "エラー " & Err.Number & " : " & Err.Description, vbCritical, "試し取得"
+
+    msg = "【" & stage & "】でエラーが発生しました。" & vbCrLf & vbCrLf
+    msg = msg & "エラー " & eNum & " : " & eDesc & vbCrLf & vbCrLf
+    If eNum = 0 And Len(eDesc) = 0 Then
+        msg = msg & "（エラー内容が取得できませんでした。VBEの「ツール → オプション → 全般」で" & vbCrLf & _
+                    "　「エラー トラップ = エラー発生時に中断」にして再実行すると、" & vbCrLf & _
+                    "　止まった行が特定できます）" & vbCrLf & vbCrLf
+    End If
+    msg = msg & "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & vbCrLf
+    If Len(sql) > 0 Then msg = msg & "SQL:" & vbCrLf & EffectiveSql(sql, dFrom, dTo)
+    MsgBox msg, vbCritical, "試し取得"
 End Sub
+
+' メッセージ表示用にパスワードを伏せる
+Private Function MaskPassword(ByVal connStr As String) As String
+    Dim parts() As String, i As Long, kv As String, key As String
+    parts = Split(connStr, ";")
+    For i = LBound(parts) To UBound(parts)
+        kv = parts(i)
+        key = UCase$(Trim$(Split(kv, "=")(0)))
+        If key = "PWD" Or key = "PASSWORD" Then
+            If InStr(kv, "=") > 0 Then parts(i) = Left$(kv, InStr(kv, "=")) & "****"
+        End If
+    Next i
+    MaskPassword = Join(parts, ";")
+End Function
 
 '------------------------------------------------------------------
 ' 取り込み対象欄のクリア（数式セルは残す）
