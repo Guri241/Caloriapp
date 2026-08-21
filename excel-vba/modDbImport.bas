@@ -337,7 +337,77 @@ ErrHandler:
 End Sub
 
 '------------------------------------------------------------------
+' データのある月を探す : シートの年月から過去へさかのぼって調べる
+'   全件スキャン(COUNT/DISTINCT)が通らないDB向け。取り込みと同じ形のSQLを使います
+'------------------------------------------------------------------
+Public Sub FindDataMonths()
+    Const MONTHS_BACK As Long = 24      ' さかのぼって調べる月数
+    Const STOP_AFTER  As Long = 6       ' 見つかったら打ち切る件数
+
+    Dim cn As Object, rs As Object, fieldMap As Object
+    Dim sql As String, msg As String, found As Long, k As Long
+    Dim baseFrom As Date, dFrom As Date, dTo As Date
+    Dim dummy As Date
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    GetPeriod baseFrom, dummy
+    sql = "SELECT " & Q(FLD_DATE) & " FROM " & TABLE_NAME & _
+          " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    For k = 0 To MONTHS_BACK
+        dFrom = DateAdd("m", -k, baseFrom)
+        dTo = DateAdd("m", 1, dFrom)
+        Application.StatusBar = "データのある月を検索中… " & Format$(dFrom, "yyyy年m月")
+
+        Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+        If Not rs.EOF Then
+            found = found + 1
+            msg = msg & "  ・" & Format$(dFrom, "yyyy年m月") & _
+                  "   （例: " & NzStr(rs.Fields(0).Value) & "）" & vbCrLf
+        End If
+        rs.Close
+
+        If found >= STOP_AFTER Then Exit For
+    Next k
+
+    cn.Close
+    Application.StatusBar = False
+
+    If found = 0 Then
+        MsgBox Format$(DateAdd("m", -MONTHS_BACK, baseFrom), "yyyy年m月") & " 〜 " & _
+               Format$(baseFrom, "yyyy年m月") & " にデータが見つかりませんでした。" & vbCrLf & vbCrLf & _
+               "・日付の書式が合っていない（DATE_FORMAT / DATE_LITERAL_TEMPLATE）" & vbCrLf & _
+               "・対象期間がこれより古い（MONTHS_BACK を増やす）" & vbCrLf & vbCrLf & _
+               "SQL:" & vbCrLf & EffectiveSql(sql, baseFrom, DateAdd("m", 1, baseFrom)), _
+               vbExclamation, "データのある月"
+    Else
+        MsgBox "データのある月:" & vbCrLf & vbCrLf & msg & vbCrLf & _
+               "この年月をシートの " & YEAR_CELL & " / " & MONTH_CELL & " に入れて TestQuery を実行してください。", _
+               vbInformation, "データのある月"
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    On Error Resume Next
+    Application.StatusBar = False
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "エラー " & errNum & " : " & errDesc, vbCritical, "データのある月"
+End Sub
+
+'------------------------------------------------------------------
 ' データの中身を確認 : 日付の範囲・設備コード・直区分・品種の実際の値
+'   ※ COUNT / DISTINCT を使うため、全件スキャンが通らないDBでは失敗します
+'      その場合は FindDataMonths と TestQuery をお使いください
 '   件数0のときや、変換設定を決めるときに使います
 '------------------------------------------------------------------
 Public Sub ShowDataSummary()
