@@ -100,6 +100,26 @@ Private Const FLD_SHIFT As String = "直区分"     ' 昼 / 夜 / スライダ /
 ' その場合シート側の見出しの「昼/夜」等は無視して設備番号だけで突き合わせます。
 '   例: Private Const FLD_SHIFT As String = ""
 
+'--- 稼働時間の計算（DBに稼働時間の列が無く、開始・終了から求める場合）-----
+'   ④の BuildFieldMap で  AddMap m, "稼働時間", CALC_DURATION  と書くと、
+'   下の設定にしたがって 終了 − 開始 を計算した値を入れます。
+Private Const FLD_START As String = "開始時刻"   ' 開始のカラム名
+Private Const FLD_END   As String = "終了時刻"   ' 終了のカラム名
+
+' 休憩時間の差し引き
+'   FLD_BREAK  : 休憩(分)が入っているカラム名。無ければ "" にする
+'   BREAK_MINUTES : FLD_BREAK が "" のときに一律で引く分数（引かないなら 0）
+Private Const FLD_BREAK     As String = ""
+Private Const BREAK_MINUTES As Long = 0
+
+' 計算結果の単位と小数桁  "MINUTE"(分) / "HOUR"(時間)
+'   シートの稼働時間が 450 のような分表記なら "MINUTE" + 0桁
+Private Const DURATION_UNIT     As String = "MINUTE"
+Private Const DURATION_DECIMALS As Long = 0
+
+' BuildFieldMap で「計算で求める」ことを表す印（変更不要）
+Private Const CALC_DURATION As String = "<稼働時間=終了-開始>"
+
 
 '================== ③ シートのレイアウト設定 ==================
 
@@ -155,7 +175,9 @@ Private Const SHIFT_PARTIAL_MATCH As Boolean = True
 ' 左 : シートA列の項目名（表記ゆれは自動で吸収。全角/半角・空白は無視されます）
 ' 右 : DBの列名
 Private Sub BuildFieldMap(ByVal m As Object)
-    AddMap m, "稼働時間", "稼働時間"
+    ' 稼働時間は DB に列が無いため、開始・終了（②の FLD_START / FLD_END）から計算します。
+    ' DB に稼働時間の列がある場合は  AddMap m, "稼働時間", "列名"  に書き換えてください。
+    AddMap m, "稼働時間", CALC_DURATION
     AddMap m, "良品数(個)", "良品数"
     AddMap m, "TT生産数", "TT生産数"
     AddMap m, "825B/TNGA生産数", "TNGA生産数"
@@ -379,7 +401,11 @@ Public Sub TestQuery()
             For i = 0 To rs.Fields.Count - 1
                 body = body & "  " & rs.Fields(i).Name & " = " & NzStr(rs.Fields(i).Value) & vbCrLf
             Next i
-            body = body & "  → 日 = " & ParseDayNumber(rs.Fields(FLD_DATE).Value) & vbCrLf & vbCrLf
+            body = body & "  → 日 = " & ParseDayNumber(rs.Fields(FLD_DATE).Value)
+            If UsesCalcDuration(fieldMap) Then
+                body = body & " / 稼働時間(計算) = " & NzStr(CalcDuration(rs))
+            End If
+            body = body & vbCrLf & vbCrLf
         End If
         If n >= MAX_ROWS Then Exit Do
         rs.MoveNext
@@ -632,7 +658,11 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
             keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
 
             For Each k In cols.Keys
-                val = rs.Fields(CStr(k)).Value
+                If IsCalcColumn(CStr(k)) Then
+                    val = CalcDuration(rs)
+                Else
+                    val = rs.Fields(CStr(k)).Value
+                End If
                 If Not IsNull(val) Then
                     cellKey = keyBase & CStr(k)
                     If AGGREGATE_MODE = "SUM" And cache.Exists(cellKey) Then
@@ -698,7 +728,7 @@ End Function
 
 ' SQL文の組み立て
 Private Function BuildSql(ByVal fieldMap As Object) As String
-    Dim cols As Object, k As Variant, sql As String
+    Dim cols As Object, sel As Object, k As Variant, sql As String
 
     If Len(Trim$(SQL_OVERRIDE)) > 0 Then
         BuildSql = SQL_OVERRIDE
@@ -706,15 +736,55 @@ Private Function BuildSql(ByVal fieldMap As Object) As String
     End If
 
     Set cols = UniqueColumns(fieldMap)
+    Set sel = NewDict()
 
-    sql = "SELECT " & Q(FLD_DATE) & ", " & Q(FLD_LINE)
-    If Len(FLD_SHIFT) > 0 Then sql = sql & ", " & Q(FLD_SHIFT)
+    AddSelect sel, FLD_DATE
+    AddSelect sel, FLD_LINE
+    AddSelect sel, FLD_SHIFT
+
     For Each k In cols.Keys
-        sql = sql & ", " & Q(CStr(k))
+        If Not IsCalcColumn(CStr(k)) Then AddSelect sel, CStr(k)
     Next k
-    sql = sql & " FROM " & TABLE_NAME & _
-          " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
-    BuildSql = sql
+
+    ' 稼働時間を計算する場合は、開始・終了（と休憩）も取得する
+    If UsesCalcDuration(fieldMap) Then
+        If Len(FLD_START) = 0 Or Len(FLD_END) = 0 Then
+            Err.Raise vbObjectError + 30, , "稼働時間の計算には FLD_START / FLD_END の設定が必要です。"
+        End If
+        AddSelect sel, FLD_START
+        AddSelect sel, FLD_END
+        AddSelect sel, FLD_BREAK
+    End If
+
+    For Each k In sel.Keys
+        If Len(sql) > 0 Then sql = sql & ", "
+        sql = sql & Q(CStr(k))
+    Next k
+
+    BuildSql = "SELECT " & sql & " FROM " & TABLE_NAME & _
+               " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
+End Function
+
+' SELECT に列を追加（空文字と重複は無視）
+Private Sub AddSelect(ByVal sel As Object, ByVal name As String)
+    If Len(name) = 0 Then Exit Sub
+    If Not sel.Exists(name) Then sel(name) = 1
+End Sub
+
+' 計算で求める疑似列か
+Private Function IsCalcColumn(ByVal name As String) As Boolean
+    IsCalcColumn = (name = CALC_DURATION)
+End Function
+
+' 項目対応の中で稼働時間の計算を使っているか
+Private Function UsesCalcDuration(ByVal fieldMap As Object) As Boolean
+    Dim k As Variant
+    For Each k In fieldMap.Keys
+        If CStr(fieldMap(k)) = CALC_DURATION Then
+            UsesCalcDuration = True
+            Exit Function
+        End If
+    Next k
 End Function
 
 ' ? を日付リテラルに置き換える（USE_PARAMETERS = False 用）
@@ -1052,6 +1122,89 @@ Private Function CellText(ByVal cel As Range) As String
     Else
         CellText = CStr(v)
     End If
+End Function
+
+' 開始・終了から稼働時間を計算する（求められなければ Null）
+Private Function CalcDuration(ByVal rs As Object) As Variant
+    Dim st As Double, en As Double, mins As Double, brk As Double
+    Dim v As Variant
+
+    CalcDuration = Null
+
+    st = ParseTimeMinutes(rs.Fields(FLD_START).Value)
+    en = ParseTimeMinutes(rs.Fields(FLD_END).Value)
+    If st < 0 Or en < 0 Then Exit Function
+
+    mins = en - st
+    If mins < 0 Then mins = mins + 24 * 60      ' 夜勤など日をまたぐ場合
+
+    ' 休憩の差し引き
+    If Len(FLD_BREAK) > 0 Then
+        v = rs.Fields(FLD_BREAK).Value
+        If Not IsNull(v) Then
+            If IsNumeric(v) Then
+                brk = CDbl(v)
+            Else
+                brk = ParseTimeMinutes(v)
+                If brk < 0 Then brk = 0
+            End If
+        End If
+    Else
+        brk = BREAK_MINUTES
+    End If
+
+    mins = mins - brk
+    If mins < 0 Then mins = 0
+
+    If UCase$(Trim$(DURATION_UNIT)) = "HOUR" Then
+        CalcDuration = Round(mins / 60, DURATION_DECIMALS)
+    Else
+        CalcDuration = Round(mins, DURATION_DECIMALS)
+    End If
+End Function
+
+' 時刻の値を「0時からの分」に変換する（判定できなければ -1）
+'   対応: 時刻型 / "08:00" / "0800" / 800 / "08:00:00" / "20260701080000"
+Private Function ParseTimeMinutes(ByVal v As Variant) As Double
+    Dim t As String, digits As String, i As Long, ch As String
+    Dim d As Date, h As Long, mi As Long
+
+    ParseTimeMinutes = -1
+    If IsNull(v) Or IsEmpty(v) Then Exit Function
+    If IsError(v) Then Exit Function
+
+    If IsDate(v) Then
+        d = CDate(v)
+        ParseTimeMinutes = Hour(d) * 60 + Minute(d) + Second(d) / 60
+        Exit Function
+    End If
+
+    t = NormText(CStr(v))
+    For i = 1 To Len(t)
+        ch = Mid$(t, i, 1)
+        If ch >= "0" And ch <= "9" Then digits = digits & ch
+    Next i
+    If Len(digits) = 0 Then Exit Function
+
+    Select Case Len(digits)
+        Case 1, 2                                   ' "8" / "08"
+            h = CLng(digits): mi = 0
+        Case 3                                      ' "800"
+            h = CLng(Left$(digits, 1)): mi = CLng(Mid$(digits, 2, 2))
+        Case 4                                      ' "0800"
+            h = CLng(Left$(digits, 2)): mi = CLng(Mid$(digits, 3, 2))
+        Case 5                                      ' "80000"
+            h = CLng(Left$(digits, 1)): mi = CLng(Mid$(digits, 2, 2))
+        Case 6                                      ' "080000"
+            h = CLng(Left$(digits, 2)): mi = CLng(Mid$(digits, 3, 2))
+        Case 12, 14                                 ' "yyyymmddhhmm(ss)"
+            h = CLng(Mid$(digits, 9, 2)): mi = CLng(Mid$(digits, 11, 2))
+        Case Else
+            Exit Function
+    End Select
+
+    If h > 24 Or mi > 59 Then Exit Function
+    ParseTimeMinutes = h * 60 + mi
 End Function
 
 ' 日付列の値から「日」を取り出す
