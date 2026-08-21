@@ -13,9 +13,10 @@ Option Explicit
 '  ŽÀsŽè‡
 '    ‡@ CONN_STR / TABLE_NAME ‚ðŽ©ŠÂ‹«‚É‡‚í‚¹‚é
 '    ‡A FLD_DATE / FLD_LINE / FLD_SHIFT ‚ÉDB‚ÌƒL[—ñ–¼‚ð“ü‚ê‚é
-'    ‡B BuildFieldMap ‚ÉuƒV[ƒg‚Ì€–Ú–¼ ¨ DB‚Ì—ñ–¼v‚ð“o˜^‚·‚é
-'    ‡C •K—v‚È‚ç BuildShiftMap / BuildLineMap ‚Å’l‚Ì“Ç‚Ý‘Ö‚¦‚ð“o˜^‚·‚é
-'    ‡D ImportFromDb ‚ðŽÀs
+'    ‡B ƒV[ƒg‚ÌƒŒƒCƒAƒEƒgiŽæ‚èž‚ÝæƒV[ƒg–¼‚È‚Çj‚ðŠm”F‚·‚é
+'    ‡C BuildFieldMap ‚ÉuƒV[ƒg‚Ì€–Ú–¼ ¨ DB‚Ì—ñ–¼v‚ð“o˜^‚·‚é
+'    ‡D BuildShiftMap / BuildLineMap ‚Å’l‚Ì“Ç‚Ý‘Ö‚¦‚ð“o˜^‚·‚é
+'   Šm”F : TestConnection ¨ ShowColumns ¨ TestQuery ¨ ImportFromDb ‚Ì‡‚ÅŽÀs
 '
 '  ¦ ADO ‚Í’x‰„ƒoƒCƒ“ƒfƒBƒ“ƒO(CreateObject)‚Ì‚½‚ßŽQÆÝ’è‚Í•s—v‚Å‚·B
 '==================================================================
@@ -100,43 +101,7 @@ Private Const FLD_SHIFT As String = "’¼‹æ•ª"     ' ’‹ / –é / ƒXƒ‰ƒCƒ_ / ƒeƒŒƒXƒR
 '   —á: Private Const FLD_SHIFT As String = ""
 
 
-'================== ‡B €–Ú–¼ ¨ DB—ñ–¼ ‚Ì‘Î‰ž ==================
-' ¶ : ƒV[ƒgA—ñ‚Ì€–Ú–¼i•\‹L‚ä‚ê‚ÍŽ©“®‚Å‹zŽûB‘SŠp/”¼ŠpE‹ó”’‚Í–³Ž‹‚³‚ê‚Ü‚·j
-' ‰E : DB‚Ì—ñ–¼
-Private Sub BuildFieldMap(ByVal m As Object)
-    AddMap m, "‰Ò“­ŽžŠÔ", "‰Ò“­ŽžŠÔ"
-    AddMap m, "—Ç•i”(ŒÂ)", "—Ç•i”"
-    AddMap m, "TT¶ŽY”", "TT¶ŽY”"
-    AddMap m, "825B/TNGA¶ŽY”", "TNGA¶ŽY”"
-    AddMap m, "Šî€l”(Å¬l”)", "Šî€l”"
-
-    ' u•Ï“®’lvu’¼ÚŽžŠÔv‚ÍƒV[ƒg‘¤‚ÌŒvŽZŽ®‚Ì‚½‚ßAŠù’è‚Å‚ÍŽæ‚èž‚Ý‚Ü‚¹‚ñB
-    ' DB‚©‚çŽæ“¾‚·‚éê‡‚Í‰º‚ÌƒRƒƒ“ƒg‚ðŠO‚µ‚Ä‚­‚¾‚³‚¢B
-    ' AddMap m, "•Ï“®’l", "•Ï“®’l"
-    ' AddMap m, "’¼ÚŽžŠÔ", "’¼ÚŽžŠÔ"
-End Sub
-
-
-'================== ‡C ’l‚Ì“Ç‚Ý‘Ö‚¦i•K—v‚Èê‡‚¾‚¯j ==================
-
-' ƒV[ƒgŒ©o‚µ‚Ì‹æ•ª•\‹L ¨ DB‚Ì’¼‹æ•ª‚Ì’l
-' —á) ƒV[ƒgu’‹v ‚É‘Î‚µ‚Ä DB ‚ª "1" ‚È‚ç  AddMap m, "’‹", "1"
-Private Sub BuildShiftMap(ByVal m As Object)
-    ' AddMap m, "’‹", "1"
-    ' AddMap m, "–é", "2"
-    ' AddMap m, "ƒXƒ‰ƒCƒ_", "SLD"
-    ' AddMap m, "ƒeƒŒƒXƒR’‹", "TEL1"
-    ' AddMap m, "ƒeƒŒƒXƒR–é", "TEL2"
-End Sub
-
-' ƒV[ƒgŒ©o‚µ‚ÌÝ”õ”Ô† ¨ DB‚ÌÝ”õ”Ô†‚Ì’l
-' —á) ƒV[ƒgu8020v ‚É‘Î‚µ‚Ä DB ‚ª "L8020" ‚È‚ç  AddMap m, "8020", "L8020"
-Private Sub BuildLineMap(ByVal m As Object)
-    ' AddMap m, "8020", "L8020"
-End Sub
-
-
-'================== ‡D ƒV[ƒg‚ÌƒŒƒCƒAƒEƒgÝ’è ==================
+'================== ‡B ƒV[ƒg‚ÌƒŒƒCƒAƒEƒgÝ’è ==================
 
 Private Const SHEET_NAME     As String = "Sub‹z‚¢ã‚°"  ' Žæ‚èž‚ÝæƒV[ƒgi‹ó‚È‚çƒAƒNƒeƒBƒuƒV[ƒgj
 Private Const YEAR_CELL      As String = "A1"  ' ”N
@@ -181,6 +146,52 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' Žæž‘O‚É‘ÎÛ—“‚ðƒNƒŠƒ
 ' “¯‚¶ “ú•t~Ý”õ~’¼ ‚ÌƒŒƒR[ƒh‚ª•¡”‚ ‚éê‡‚Ìˆµ‚¢  "LAST"(ŒãŸ‚¿) / "SUM"(‡Œv)
 Private Const AGGREGATE_MODE As String = "LAST"
 
+' ‹æ•ªi’‹/–éj‚Ì“Ë‚«‡‚í‚¹‚ÅAŠ®‘Sˆê’v‚µ‚È‚¢‚Æ‚«‚Éu’‹vu–év‚ðŠÜ‚Þ‚©‚Å”»’è‚·‚é
+' —á: ƒV[ƒguÃÚ½º’‹v¨ BuildShiftMap ‚Ìu’‹v‚Ì•ÏŠ·’l‚ðŽg‚¤
+Private Const SHIFT_PARTIAL_MATCH As Boolean = True
+
+
+'================== ‡C €–Ú–¼ ¨ DB—ñ–¼ ‚Ì‘Î‰ž ==================
+' ¶ : ƒV[ƒgA—ñ‚Ì€–Ú–¼i•\‹L‚ä‚ê‚ÍŽ©“®‚Å‹zŽûB‘SŠp/”¼ŠpE‹ó”’‚Í–³Ž‹‚³‚ê‚Ü‚·j
+' ‰E : DB‚Ì—ñ–¼
+Private Sub BuildFieldMap(ByVal m As Object)
+    AddMap m, "‰Ò“­ŽžŠÔ", "‰Ò“­ŽžŠÔ"
+    AddMap m, "—Ç•i”(ŒÂ)", "—Ç•i”"
+    AddMap m, "TT¶ŽY”", "TT¶ŽY”"
+    AddMap m, "825B/TNGA¶ŽY”", "TNGA¶ŽY”"
+    AddMap m, "Šî€l”(Å¬l”)", "Šî€l”"
+
+    ' u•Ï“®’lvu’¼ÚŽžŠÔv‚ÍƒV[ƒg‘¤‚ÌŒvŽZŽ®‚Ì‚½‚ßAŠù’è‚Å‚ÍŽæ‚èž‚Ý‚Ü‚¹‚ñB
+    ' DB‚©‚çŽæ“¾‚·‚éê‡‚Í‰º‚ÌƒRƒƒ“ƒg‚ðŠO‚µ‚Ä‚­‚¾‚³‚¢B
+    ' AddMap m, "•Ï“®’l", "•Ï“®’l"
+    ' AddMap m, "’¼ÚŽžŠÔ", "’¼ÚŽžŠÔ"
+End Sub
+
+
+'================== ‡D ’l‚Ì“Ç‚Ý‘Ö‚¦i•K—v‚Èê‡‚¾‚¯j ==================
+
+' ƒV[ƒgŒ©o‚µ‚Ì‹æ•ª•\‹L ¨ DB‚Ì’¼‹æ•ª‚Ì’l
+'   DB‚Ì’¼‹æ•ª‚ª 1=’‹ / 2=–é ‚Ì”Žš‚Å“ü‚Á‚Ä‚­‚é‚½‚ßA‰º‚Ì‚æ‚¤‚É•ÏŠ·‚µ‚Ü‚·B
+'   u8022 ÃÚ½º ’‹v‚Ì‚æ‚¤‚É‹æ•ª–¼‚ª•t‚­Œ©o‚µ‚ÍAŠ®‘Sˆê’v‚ÅŒ©‚Â‚©‚ç‚È‚¢ê‡‚É
+'   SHIFT_PARTIAL_MATCH = True ‚È‚çu’‹v‚ðŠÜ‚Þ‚©‚Ç‚¤‚©‚Å”»’è‚µ‚Ü‚·B
+Private Sub BuildShiftMap(ByVal m As Object)
+    AddMap m, "’‹", "1"
+    AddMap m, "–é", "2"
+
+    ' ’‹–é‚Ì‹æ•Ê‚ª–³‚¢ƒuƒƒbƒNi—á: 8022 ½×²ÀÞj‚ÍADB‚É“ü‚Á‚Ä‚¢‚é’l‚ðŒÂ•Ê‚É“o˜^‚µ‚Ä‚­‚¾‚³‚¢B
+    ' AddMap m, "ƒXƒ‰ƒCƒ_", "1"
+
+    ' ŒÂ•Ê‚ÉŒÅ’è‚µ‚½‚¢ê‡‚ÍŠ®‘Sˆê’v‚Åæ‚É“o˜^‚Å‚«‚Ü‚·i•”•ªˆê’v‚æ‚è—Dæ‚³‚ê‚Ü‚·j
+    ' AddMap m, "ƒeƒŒƒXƒR’‹", "1"
+    ' AddMap m, "ƒeƒŒƒXƒR–é", "2"
+End Sub
+
+' ƒV[ƒgŒ©o‚µ‚ÌÝ”õ”Ô† ¨ DB‚ÌÝ”õ”Ô†‚Ì’l
+' —á) ƒV[ƒgu8020v ‚É‘Î‚µ‚Ä DB ‚ª "L8020" ‚È‚ç  AddMap m, "8020", "L8020"
+Private Sub BuildLineMap(ByVal m As Object)
+    ' AddMap m, "8020", "L8020"
+End Sub
+
 
 '==================================================================
 '  ‚±‚±‚©‚ç‰º‚Í’Êí•ÒW•s—v
@@ -192,7 +203,7 @@ Private Const AGGREGATE_MODE As String = "LAST"
 Public Sub ImportFromDb()
     Dim ws As Worksheet
     Dim fieldMap As Object, shiftMap As Object, lineMap As Object
-    Dim blocks As Collection, unknownLabels As Collection
+    Dim blocks As Collection, unknownLabels As Collection, emptyBlocks As Collection
     Dim cache As Object
     Dim yy As Long, mm As Long
     Dim dFrom As Date, dTo As Date
@@ -225,6 +236,7 @@ Public Sub ImportFromDb()
     End If
 
     Set unknownLabels = New Collection
+    Set emptyBlocks = New Collection
     Set blocks = ScanLayout(ws, fieldMap, unknownLabels)
     If blocks.Count = 0 Then
         Err.Raise vbObjectError + 4, , "A—ñ‚ÉƒuƒƒbƒNŒ©o‚µi—á: 8020 ’‹j‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ‚Å‚µ‚½B" & vbCrLf & _
@@ -241,13 +253,14 @@ Public Sub ImportFromDb()
     If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks, monthDays
 
     WriteBlocks ws, blocks, cache, shiftMap, lineMap, monthDays, _
-                writeCount, skipFormula, missCount
+                writeCount, skipFormula, missCount, emptyBlocks
 
     Application.Calculation = calcMode
     Application.ScreenUpdating = True
     restored = True
 
-    MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, unknownLabels), _
+    MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, _
+                       unknownLabels, emptyBlocks), _
            vbInformation, "DBŽæ‚èž‚ÝŠ®—¹"
     Exit Sub
 
@@ -747,13 +760,15 @@ End Function
 
 Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal cache As Object, _
                         ByVal shiftMap As Object, ByVal lineMap As Object, ByVal monthDays As Long, _
-                        ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long)
+                        ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long, _
+                        ByVal emptyBlocks As Collection)
     Dim blk As Object, items As Object, days As Object
     Dim rKey As Variant, cKey As Variant
     Dim r As Long, c As Long, dayNo As Long
     Dim dbCol As String, keyBase As String, cellKey As String
     Dim lineVal As String, shiftVal As String
     Dim cel As Range
+    Dim blockHits As Long
 
     For Each blk In blocks
         Set items = blk("items")
@@ -761,11 +776,12 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
         If items.Count > 0 Then
             lineVal = MapValue(lineMap, CStr(blk("line")))
             If Len(FLD_SHIFT) > 0 Then
-                shiftVal = MapValue(shiftMap, CStr(blk("shift")))
+                shiftVal = MapShift(shiftMap, CStr(blk("shift")))
             Else
                 shiftVal = ""
             End If
             keyBase = NormText(lineVal) & "|" & NormText(shiftVal) & "|"
+            blockHits = 0
 
             For Each rKey In items.Keys
                 r = CLng(rKey)
@@ -783,6 +799,7 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
                     Else
                         cellKey = keyBase & CStr(dayNo) & "|" & dbCol
                         If cache.Exists(cellKey) Then
+                            blockHits = blockHits + 1
                             If SKIP_FORMULA_CELLS And cel.HasFormula Then
                                 skipFormula = skipFormula + 1
                             Else
@@ -803,6 +820,11 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
                     End If
                 Next cKey
             Next rKey
+
+            If blockHits = 0 Then
+                emptyBlocks.Add CStr(blk("title")) & "  iŒŸõƒL[: " & _
+                                lineVal & IIf(Len(shiftVal) > 0, " / " & shiftVal, "") & "j"
+            End If
         End If
     Next blk
 End Sub
@@ -851,7 +873,7 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
                              ByVal blocks As Collection, _
                              ByVal recCount As Long, ByVal writeCount As Long, _
                              ByVal skipFormula As Long, ByVal missCount As Long, _
-                             ByVal unknownLabels As Collection) As String
+                             ByVal unknownLabels As Collection, ByVal emptyBlocks As Collection) As String
     Dim s As String, i As Long, n As Long
 
     s = yy & "”N" & mm & "ŒŽ (1`" & monthDays & "“ú) ‚ÌŽæ‚èž‚Ý‚ªŠ®—¹‚µ‚Ü‚µ‚½B" & vbCrLf & vbCrLf
@@ -869,6 +891,17 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
             s = s & "  E" & unknownLabels(i) & vbCrLf
         Next i
         If unknownLabels.Count > n Then s = s & "  E‚Ù‚© " & (unknownLabels.Count - n) & " Œ" & vbCrLf
+    End If
+
+    If emptyBlocks.Count > 0 Then
+        s = s & vbCrLf & "¦ 1Œ‚àŠY“–ƒf[ƒ^‚ª–³‚©‚Á‚½ƒuƒƒbƒN:" & vbCrLf
+        n = emptyBlocks.Count
+        If n > 15 Then n = 15
+        For i = 1 To n
+            s = s & "  E" & emptyBlocks(i) & vbCrLf
+        Next i
+        If emptyBlocks.Count > n Then s = s & "  E‚Ù‚© " & (emptyBlocks.Count - n) & " Œ" & vbCrLf
+        s = s & "  ¨ Ý”õ”Ô†E’¼‹æ•ª‚Ì•ÏŠ·iBuildLineMap / BuildShiftMapj‚ð‚²Šm”F‚­‚¾‚³‚¢B" & vbCrLf
     End If
 
     If recCount = 0 Then
@@ -953,6 +986,37 @@ End Function
 Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
     m(NormText(sheetLabel)) = dbName
 End Sub
+
+' ‹æ•ª‚Ì•ÏŠ·iŠ®‘Sˆê’v ¨ •”•ªˆê’v ¨ ‚»‚Ì‚Ü‚Üj
+Private Function MapShift(ByVal m As Object, ByVal key As String) As String
+    Dim k As String, mk As Variant
+    Dim best As String, bestLen As Long
+
+    k = NormText(key)
+
+    If m.Exists(k) Then
+        MapShift = CStr(m(k))
+        Exit Function
+    End If
+
+    If SHIFT_PARTIAL_MATCH And Len(k) > 0 Then
+        ' ˆê’v‚µ‚½’†‚ÅÅ‚à’·‚¢ƒL[‚ðÌ—piuƒeƒŒƒXƒR’‹v‚Æu’‹v‚ÌŽæ‚èˆá‚¦‚ð–h‚®j
+        For Each mk In m.Keys
+            If Len(CStr(mk)) > 0 Then
+                If InStr(k, CStr(mk)) > 0 And Len(CStr(mk)) > bestLen Then
+                    best = CStr(m(mk))
+                    bestLen = Len(CStr(mk))
+                End If
+            End If
+        Next mk
+        If bestLen > 0 Then
+            MapShift = best
+            Exit Function
+        End If
+    End If
+
+    MapShift = key
+End Function
 
 Private Function MapValue(ByVal m As Object, ByVal key As String) As String
     Dim k As String

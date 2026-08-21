@@ -15,9 +15,10 @@ Option Explicit
 '  実行手順
 '    ① CONN_STR / TABLE_NAME を自環境に合わせる
 '    ② FLD_DATE / FLD_LINE / FLD_SHIFT にDBのキー列名を入れる
-'    ③ BuildFieldMap に「シートの項目名 → DBの列名」を登録する
-'    ④ 必要なら BuildShiftMap / BuildLineMap で値の読み替えを登録する
-'    ⑤ ImportFromDb を実行
+'    ③ シートのレイアウト（取り込み先シート名など）を確認する
+'    ④ BuildFieldMap に「シートの項目名 → DBの列名」を登録する
+'    ⑤ BuildShiftMap / BuildLineMap で値の読み替えを登録する
+'   確認 : TestConnection → ShowColumns → TestQuery → ImportFromDb の順で実行
 '
 '  ※ ADO は遅延バインディング(CreateObject)のため参照設定は不要です。
 '==================================================================
@@ -102,43 +103,7 @@ Private Const FLD_SHIFT As String = "直区分"     ' 昼 / 夜 / スライダ /
 '   例: Private Const FLD_SHIFT As String = ""
 
 
-'================== ③ 項目名 → DB列名 の対応 ==================
-' 左 : シートA列の項目名（表記ゆれは自動で吸収。全角/半角・空白は無視されます）
-' 右 : DBの列名
-Private Sub BuildFieldMap(ByVal m As Object)
-    AddMap m, "稼働時間", "稼働時間"
-    AddMap m, "良品数(個)", "良品数"
-    AddMap m, "TT生産数", "TT生産数"
-    AddMap m, "825B/TNGA生産数", "TNGA生産数"
-    AddMap m, "基準人数(最小人数)", "基準人数"
-
-    ' 「変動値」「直接時間」はシート側の計算式のため、既定では取り込みません。
-    ' DBから取得する場合は下のコメントを外してください。
-    ' AddMap m, "変動値", "変動値"
-    ' AddMap m, "直接時間", "直接時間"
-End Sub
-
-
-'================== ④ 値の読み替え（必要な場合だけ） ==================
-
-' シート見出しの区分表記 → DBの直区分の値
-' 例) シート「昼」 に対して DB が "1" なら  AddMap m, "昼", "1"
-Private Sub BuildShiftMap(ByVal m As Object)
-    ' AddMap m, "昼", "1"
-    ' AddMap m, "夜", "2"
-    ' AddMap m, "スライダ", "SLD"
-    ' AddMap m, "テレスコ昼", "TEL1"
-    ' AddMap m, "テレスコ夜", "TEL2"
-End Sub
-
-' シート見出しの設備番号 → DBの設備番号の値
-' 例) シート「8020」 に対して DB が "L8020" なら  AddMap m, "8020", "L8020"
-Private Sub BuildLineMap(ByVal m As Object)
-    ' AddMap m, "8020", "L8020"
-End Sub
-
-
-'================== ⑤ シートのレイアウト設定 ==================
+'================== ③ シートのレイアウト設定 ==================
 
 Private Const SHEET_NAME     As String = "Sub吸い上げ"  ' 取り込み先シート（空ならアクティブシート）
 Private Const YEAR_CELL      As String = "A1"  ' 年
@@ -183,6 +148,52 @@ Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄
 ' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
 Private Const AGGREGATE_MODE As String = "LAST"
 
+' 区分（昼/夜）の突き合わせで、完全一致しないときに「昼」「夜」を含むかで判定する
+' 例: シート「ﾃﾚｽｺ昼」→ BuildShiftMap の「昼」の変換値を使う
+Private Const SHIFT_PARTIAL_MATCH As Boolean = True
+
+
+'================== ④ 項目名 → DB列名 の対応 ==================
+' 左 : シートA列の項目名（表記ゆれは自動で吸収。全角/半角・空白は無視されます）
+' 右 : DBの列名
+Private Sub BuildFieldMap(ByVal m As Object)
+    AddMap m, "稼働時間", "稼働時間"
+    AddMap m, "良品数(個)", "良品数"
+    AddMap m, "TT生産数", "TT生産数"
+    AddMap m, "825B/TNGA生産数", "TNGA生産数"
+    AddMap m, "基準人数(最小人数)", "基準人数"
+
+    ' 「変動値」「直接時間」はシート側の計算式のため、既定では取り込みません。
+    ' DBから取得する場合は下のコメントを外してください。
+    ' AddMap m, "変動値", "変動値"
+    ' AddMap m, "直接時間", "直接時間"
+End Sub
+
+
+'================== ⑤ 値の読み替え（必要な場合だけ） ==================
+
+' シート見出しの区分表記 → DBの直区分の値
+'   DBの直区分が 1=昼 / 2=夜 の数字で入ってくるため、下のように変換します。
+'   「8022 ﾃﾚｽｺ 昼」のように区分名が付く見出しは、完全一致で見つからない場合に
+'   SHIFT_PARTIAL_MATCH = True なら「昼」を含むかどうかで判定します。
+Private Sub BuildShiftMap(ByVal m As Object)
+    AddMap m, "昼", "1"
+    AddMap m, "夜", "2"
+
+    ' 昼夜の区別が無いブロック（例: 8022 ｽﾗｲﾀﾞ）は、DBに入っている値を個別に登録してください。
+    ' AddMap m, "スライダ", "1"
+
+    ' 個別に固定したい場合は完全一致で先に登録できます（部分一致より優先されます）
+    ' AddMap m, "テレスコ昼", "1"
+    ' AddMap m, "テレスコ夜", "2"
+End Sub
+
+' シート見出しの設備番号 → DBの設備番号の値
+' 例) シート「8020」 に対して DB が "L8020" なら  AddMap m, "8020", "L8020"
+Private Sub BuildLineMap(ByVal m As Object)
+    ' AddMap m, "8020", "L8020"
+End Sub
+
 
 '==================================================================
 '  ここから下は通常編集不要
@@ -194,7 +205,7 @@ Private Const AGGREGATE_MODE As String = "LAST"
 Public Sub ImportFromDb()
     Dim ws As Worksheet
     Dim fieldMap As Object, shiftMap As Object, lineMap As Object
-    Dim blocks As Collection, unknownLabels As Collection
+    Dim blocks As Collection, unknownLabels As Collection, emptyBlocks As Collection
     Dim cache As Object
     Dim yy As Long, mm As Long
     Dim dFrom As Date, dTo As Date
@@ -227,6 +238,7 @@ Public Sub ImportFromDb()
     End If
 
     Set unknownLabels = New Collection
+    Set emptyBlocks = New Collection
     Set blocks = ScanLayout(ws, fieldMap, unknownLabels)
     If blocks.Count = 0 Then
         Err.Raise vbObjectError + 4, , "A列にブロック見出し（例: 8020 昼）が見つかりませんでした。" & vbCrLf & _
@@ -243,13 +255,14 @@ Public Sub ImportFromDb()
     If CLEAR_BEFORE_IMPORT Then ClearBlocks ws, blocks, monthDays
 
     WriteBlocks ws, blocks, cache, shiftMap, lineMap, monthDays, _
-                writeCount, skipFormula, missCount
+                writeCount, skipFormula, missCount, emptyBlocks
 
     Application.Calculation = calcMode
     Application.ScreenUpdating = True
     restored = True
 
-    MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, unknownLabels), _
+    MsgBox BuildReport(yy, mm, monthDays, blocks, recCount, writeCount, skipFormula, missCount, _
+                       unknownLabels, emptyBlocks), _
            vbInformation, "DB取り込み完了"
     Exit Sub
 
@@ -749,13 +762,15 @@ End Function
 
 Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal cache As Object, _
                         ByVal shiftMap As Object, ByVal lineMap As Object, ByVal monthDays As Long, _
-                        ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long)
+                        ByRef writeCount As Long, ByRef skipFormula As Long, ByRef missCount As Long, _
+                        ByVal emptyBlocks As Collection)
     Dim blk As Object, items As Object, days As Object
     Dim rKey As Variant, cKey As Variant
     Dim r As Long, c As Long, dayNo As Long
     Dim dbCol As String, keyBase As String, cellKey As String
     Dim lineVal As String, shiftVal As String
     Dim cel As Range
+    Dim blockHits As Long
 
     For Each blk In blocks
         Set items = blk("items")
@@ -763,11 +778,12 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
         If items.Count > 0 Then
             lineVal = MapValue(lineMap, CStr(blk("line")))
             If Len(FLD_SHIFT) > 0 Then
-                shiftVal = MapValue(shiftMap, CStr(blk("shift")))
+                shiftVal = MapShift(shiftMap, CStr(blk("shift")))
             Else
                 shiftVal = ""
             End If
             keyBase = NormText(lineVal) & "|" & NormText(shiftVal) & "|"
+            blockHits = 0
 
             For Each rKey In items.Keys
                 r = CLng(rKey)
@@ -785,6 +801,7 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
                     Else
                         cellKey = keyBase & CStr(dayNo) & "|" & dbCol
                         If cache.Exists(cellKey) Then
+                            blockHits = blockHits + 1
                             If SKIP_FORMULA_CELLS And cel.HasFormula Then
                                 skipFormula = skipFormula + 1
                             Else
@@ -805,6 +822,11 @@ Private Sub WriteBlocks(ByVal ws As Worksheet, ByVal blocks As Collection, ByVal
                     End If
                 Next cKey
             Next rKey
+
+            If blockHits = 0 Then
+                emptyBlocks.Add CStr(blk("title")) & "  （検索キー: " & _
+                                lineVal & IIf(Len(shiftVal) > 0, " / " & shiftVal, "") & "）"
+            End If
         End If
     Next blk
 End Sub
@@ -853,7 +875,7 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
                              ByVal blocks As Collection, _
                              ByVal recCount As Long, ByVal writeCount As Long, _
                              ByVal skipFormula As Long, ByVal missCount As Long, _
-                             ByVal unknownLabels As Collection) As String
+                             ByVal unknownLabels As Collection, ByVal emptyBlocks As Collection) As String
     Dim s As String, i As Long, n As Long
 
     s = yy & "年" & mm & "月 (1〜" & monthDays & "日) の取り込みが完了しました。" & vbCrLf & vbCrLf
@@ -871,6 +893,17 @@ Private Function BuildReport(ByVal yy As Long, ByVal mm As Long, ByVal monthDays
             s = s & "  ・" & unknownLabels(i) & vbCrLf
         Next i
         If unknownLabels.Count > n Then s = s & "  ・ほか " & (unknownLabels.Count - n) & " 件" & vbCrLf
+    End If
+
+    If emptyBlocks.Count > 0 Then
+        s = s & vbCrLf & "※ 1件も該当データが無かったブロック:" & vbCrLf
+        n = emptyBlocks.Count
+        If n > 15 Then n = 15
+        For i = 1 To n
+            s = s & "  ・" & emptyBlocks(i) & vbCrLf
+        Next i
+        If emptyBlocks.Count > n Then s = s & "  ・ほか " & (emptyBlocks.Count - n) & " 件" & vbCrLf
+        s = s & "  → 設備番号・直区分の変換（BuildLineMap / BuildShiftMap）をご確認ください。" & vbCrLf
     End If
 
     If recCount = 0 Then
@@ -955,6 +988,37 @@ End Function
 Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
     m(NormText(sheetLabel)) = dbName
 End Sub
+
+' 区分の変換（完全一致 → 部分一致 → そのまま）
+Private Function MapShift(ByVal m As Object, ByVal key As String) As String
+    Dim k As String, mk As Variant
+    Dim best As String, bestLen As Long
+
+    k = NormText(key)
+
+    If m.Exists(k) Then
+        MapShift = CStr(m(k))
+        Exit Function
+    End If
+
+    If SHIFT_PARTIAL_MATCH And Len(k) > 0 Then
+        ' 一致した中で最も長いキーを採用（「テレスコ昼」と「昼」の取り違えを防ぐ）
+        For Each mk In m.Keys
+            If Len(CStr(mk)) > 0 Then
+                If InStr(k, CStr(mk)) > 0 And Len(CStr(mk)) > bestLen Then
+                    best = CStr(m(mk))
+                    bestLen = Len(CStr(mk))
+                End If
+            End If
+        Next mk
+        If bestLen > 0 Then
+            MapShift = best
+            Exit Function
+        End If
+    End If
+
+    MapShift = key
+End Function
 
 Private Function MapValue(ByVal m As Object, ByVal key As String) As String
     Dim k As String
