@@ -105,13 +105,44 @@ WHERE [日付] >= ? AND [日付] < ?
 | `FLD_DATE` | 日付列（1日単位） |
 | `FLD_LINE` | 設備番号列（8020 / 8021 / 8022 …） |
 | `FLD_SHIFT` | 直区分列（昼 / 夜 / スライダ / テレスコ昼 …）。設備番号だけで一意なら `""` にする |
+| `FLD_START` / `FLD_END` | 開始・終了時刻のカラム名（稼働時間を計算する場合） |
+| `FLD_BREAK` / `BREAK_MINUTES` | 差し引く休憩。カラムから取るか、一律の分数か |
+| `DURATION_UNIT` / `DURATION_DECIMALS` | 計算結果の単位（`"MINUTE"` / `"HOUR"`）と小数桁 |
+
+#### 稼働時間を開始・終了から計算する
+
+DB に稼働時間の列が無く、開始・終了の時刻から求める場合の設定です。
+④ の `BuildFieldMap` で `CALC_DURATION` を指定した項目が `終了 − 開始 − 休憩` で計算されます（既定で有効）。
+
+```vba
+' ② 開始・終了のカラム名
+Private Const FLD_START As String = "開始時刻"
+Private Const FLD_END   As String = "終了時刻"
+
+' 休憩の差し引き（FLD_BREAK が優先。使わないなら "" と 0 のまま）
+Private Const FLD_BREAK     As String = ""      ' 休憩(分)のカラム名
+Private Const BREAK_MINUTES As Long = 0         ' 一律で引く分数
+
+' 単位  "MINUTE"(分) / "HOUR"(時間)
+Private Const DURATION_UNIT     As String = "MINUTE"
+Private Const DURATION_DECIMALS As Long = 0
+
+' ④ 項目対応
+AddMap m, "稼働時間", CALC_DURATION
+```
+
+* **日をまたぐ夜勤**（例 20:00 → 5:00）は自動で +24 時間し、540 分と計算します
+* 時刻の値は **時刻型 / `08:00` / `0800` / `800` / `08:00:00` / `20260701080000`** のいずれでも読み取れます
+* 開始か終了が空（NULL）の場合、そのセルには何も書き込みません
+* DB に稼働時間の列がある場合は `AddMap m, "稼働時間", "列名"` に戻せば、計算せずそのまま取り込みます
+* 計算結果は `TestQuery` の先頭3件に `稼働時間(計算) = 450` の形で表示されるので、実行前に確認できます
 
 ### ④ 項目名 → DB列名（`BuildFieldMap`）
 
 シート A 列の項目名と DB の列名をここで結びつけます。
 
 ```vba
-AddMap m, "稼働時間",            "稼働時間"
+AddMap m, "稼働時間",            CALC_DURATION    ' 開始・終了から計算（上記参照）
 AddMap m, "良品数(個)",          "良品数"
 AddMap m, "TT生産数",            "TT生産数"
 AddMap m, "825B/TNGA生産数",     "TNGA生産数"
@@ -209,7 +240,7 @@ Private Const FLD_SHIFT As String = "直区分"      ' 昼夜の列（無けれ�
 **手順3** ③ の項目名対応を埋める（左=シートA列の項目名、右=`ShowColumns` に出た列名）
 
 ```vba
-AddMap m, "稼働時間",           "ｶﾞﾜﾄﾞｳｼﾞｶﾝ"      ' ← 実際の列名に置き換え
+AddMap m, "稼働時間",           CALC_DURATION     ' ← 開始・終了から計算（列がある場合は列名）
 AddMap m, "良品数(個)",         "良品数"
 AddMap m, "TT生産数",           "TT生産数"
 AddMap m, "825B/TNGA生産数",    "TNGA生産数"
