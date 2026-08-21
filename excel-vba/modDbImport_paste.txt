@@ -31,38 +31,60 @@ Private Const adDBTimeStamp      As Long = 135
 
 '================== ① 接続・SQL 設定 ==================
 
-' 接続文字列（下は SQL Server の例。使うDBに合わせて書き換えてください）
-'   SQL Server : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;User ID=UID;Password=PWD;"
-'   SQL Server(認証統合) : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;Integrated Security=SSPI;"
-'   Access     : "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\path\data.accdb;"
-'   Oracle     : "Provider=OraOLEDB.Oracle;Data Source=TNS;User Id=UID;Password=PWD;"
-'   ODBC全般   : "Provider=MSDASQL;DSN=DSN_NAME;UID=UID;PWD=PWD;"
+' 接続文字列 : Dr.Sum に ODBC で接続します
+'
+'   【推奨】ODBCデータソース(DSN)を作ってから、その名前を指定する方法
+'       "Provider=MSDASQL;DSN=DRSUM;UID=ユーザーID;PWD=パスワード;"
+'     ※ DSN は Windows の「ODBC データ ソース アドミニストレーター」で作成します。
+'        Excel が 32bit なら【32ビット版】、64bit なら【64ビット版】で作ること。
+'        （ビット数が違うと "データ ソース名および指定された既定のドライバーが見つかりません" になります）
+'
+'   【DSNレス】DSN を作らずドライバーを直接指定する方法
+'       "Provider=MSDASQL;Driver={Dr.Sum ODBC Driver};Server=サーバー名;Port=6001;" & _
+'       "Database=DB名;UID=ユーザーID;PWD=パスワード;"
+'     ※ Driver={...} の名前とポート番号は導入バージョンで異なります。
+'        ODBCアドミニストレーターの「ドライバー」タブに出ている名称をそのまま入れてください
+'        （例: {Dr.Sum ODBC Driver} / {Dr.Sum EA ODBC Driver} / {Dr.Sum Ver.5.5 ODBC Driver}）
+'
+'   （参考）他DBの場合
+'     SQL Server : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;User ID=UID;Password=PWD;"
+'     Access     : "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\path\data.accdb;"
+'     Oracle     : "Provider=OraOLEDB.Oracle;Data Source=TNS;User Id=UID;Password=PWD;"
 Private Const CONN_STR As String = _
-    "Provider=SQLOLEDB;Data Source=SERVER_NAME;Initial Catalog=DB_NAME;User ID=USER_ID;Password=PASSWORD;"
+    "Provider=MSDASQL;DSN=DRSUM;UID=USER_ID;PWD=PASSWORD;"
 
-' 取得元テーブル（またはビュー）名
-Private Const TABLE_NAME As String = "dbo.生産実績"
+' 取得元テーブル（またはビュー）名  ※Dr.Sum は dbo. などのスキーマ修飾は付けません
+Private Const TABLE_NAME As String = "生産実績"
 
-' 識別子の引用符（SQL Server / Access = [ ]  Oracle / PostgreSQL = " "  MySQL = ` `  不要なら空文字）
-Private Const QUOTE_OPEN  As String = "["
-Private Const QUOTE_CLOSE As String = "]"
+' 識別子の引用符  Dr.Sum は付けないのが無難（必要なら " " ）
+'   SQL Server / Access = [ ]   Oracle / PostgreSQL = " "   MySQL = ` `
+Private Const QUOTE_OPEN  As String = ""
+Private Const QUOTE_CLOSE As String = ""
 
 ' SQLを自分で書きたい場合はここに記述（空なら TABLE_NAME から自動生成）
 '   日付範囲の条件は「>= ?」「< ?」の2つの ? を必ずこの順で入れてください。
 '   例: "SELECT 日付, 設備番号, 直区分, 稼働時間, 良品数 FROM V_生産実績 WHERE 日付 >= ? AND 日付 < ?"
 Private Const SQL_OVERRIDE As String = ""
 
-' True  : パラメータ(?)で日付を渡す（推奨）
-' False : SQL文に日付リテラルを埋め込む（? が使えないプロバイダ向け）
-Private Const USE_PARAMETERS As Boolean = True
+' True  : パラメータ(?)で日付を渡す
+' False : SQL文に日付リテラルを直接埋め込む（Dr.Sum ODBC はこちらが確実。既定）
+Private Const USE_PARAMETERS As Boolean = False
 
-' USE_PARAMETERS = False のときの日付リテラル書式
-'   SQL Server / MySQL / PostgreSQL : "'yyyy-mm-dd'"
-'   Access                          : "\#yyyy/mm/dd\#"
-'   Oracle                          : "TO_DATE('yyyy-mm-dd','YYYY-MM-DD')"
-Private Const DATE_LITERAL_FMT As String = "'yyyy-mm-dd'"
+' 日付リテラルの作り方（USE_PARAMETERS = False のとき）
+'   DATE_FORMAT          : 日付を文字にする書式
+'   DATE_LITERAL_TEMPLATE: <DATE> の部分に上の書式の文字列が入ります
+'
+'   ▼ Dr.Sum の日付列の持ち方に合わせて選んでください
+'     日付型            : "'<DATE>'"        + "yyyy-mm-dd"   ← 既定
+'     日付型(スラッシュ): "'<DATE>'"        + "yyyy/mm/dd"
+'     文字列 YYYYMMDD   : "'<DATE>'"        + "yyyymmdd"
+'     数値   YYYYMMDD   : "<DATE>"          + "yyyymmdd"
+'     ODBCエスケープ    : "{d '<DATE>'}"    + "yyyy-mm-dd"
+'   （参考）Access : "#<DATE>#" / Oracle : "TO_DATE('<DATE>','YYYY-MM-DD')"
+Private Const DATE_FORMAT           As String = "yyyy-mm-dd"
+Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 
-' 日付パラメータの型。エラーになる場合は adDBTimeStamp に変更してください。
+' 日付パラメータの型（USE_PARAMETERS = True のとき）。エラー時は adDBTimeStamp に変更
 Private Const DATE_PARAM_TYPE As Long = adDate
 
 ' クエリのタイムアウト（秒）
@@ -262,13 +284,66 @@ End Sub
 ' 実行されるSQLを確認する
 '------------------------------------------------------------------
 Public Sub ShowGeneratedSql()
-    Dim fieldMap As Object, sql As String
+    Dim fieldMap As Object, dFrom As Date, dTo As Date
+
     Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    GetPeriod dFrom, dTo
+    MsgBox EffectiveSql(BuildSql(fieldMap), dFrom, dTo), vbInformation, "生成されるSQL"
+End Sub
+
+'------------------------------------------------------------------
+' 試し取得 : シートには書き込まず、件数と先頭数件の中身を表示する
+'   Dr.Sum の接続・SQL・日付書式の確認に使ってください
+'------------------------------------------------------------------
+Public Sub TestQuery()
+    Const PREVIEW_ROWS As Long = 3
+    Const MAX_ROWS As Long = 5000
+
+    Dim fieldMap As Object, cn As Object, rs As Object
+    Dim sql As String, msg As String, body As String
+    Dim dFrom As Date, dTo As Date
+    Dim n As Long, i As Long
+
+    On Error GoTo ErrHandler
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    GetPeriod dFrom, dTo
     sql = BuildSql(fieldMap)
-    If Not USE_PARAMETERS Then
-        sql = InlineDates(sql, DateSerial(2026, 7, 1), DateSerial(2026, 8, 1))
-    End If
-    MsgBox sql, vbInformation, "生成されるSQL"
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+    Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+
+    Do Until rs.EOF
+        n = n + 1
+        If n <= PREVIEW_ROWS Then
+            body = body & "【" & n & "件目】" & vbCrLf
+            For i = 0 To rs.Fields.Count - 1
+                body = body & "  " & rs.Fields(i).Name & " = " & NzStr(rs.Fields(i).Value) & vbCrLf
+            Next i
+            body = body & "  → 日 = " & ParseDayNumber(rs.Fields(FLD_DATE).Value) & vbCrLf & vbCrLf
+        End If
+        If n >= MAX_ROWS Then Exit Do
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    cn.Close
+
+    msg = "取得件数 : " & n & " 件"
+    If n >= MAX_ROWS Then msg = msg & "（" & MAX_ROWS & " 件で打ち切り）"
+    msg = msg & vbCrLf & vbCrLf & body
+    msg = msg & "SQL:" & vbCrLf & EffectiveSql(sql, dFrom, dTo)
+    MsgBox msg, vbInformation, "試し取得"
+    Exit Sub
+
+ErrHandler:
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "エラー " & Err.Number & " : " & Err.Description, vbCritical, "試し取得"
 End Sub
 
 '------------------------------------------------------------------
@@ -465,7 +540,7 @@ End Function
 ' 取得結果を  設備|直|日|DB列名 → 値  のディクショナリに詰める
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                            ByVal fieldMap As Object, ByRef recCount As Long) As Object
-    Dim cn As Object, cmd As Object, rs As Object
+    Dim cn As Object, rs As Object
     Dim cols As Object, cache As Object
     Dim sql As String, k As Variant
     Dim lineKey As String, shiftKey As String, keyBase As String, cellKey As String
@@ -484,25 +559,12 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
 
     On Error GoTo CleanFail
 
-    Set cmd = CreateObject("ADODB.Command")
-    Set cmd.ActiveConnection = cn
-    cmd.CommandType = adCmdText
-    cmd.CommandTimeout = CMD_TIMEOUT
-
-    If USE_PARAMETERS Then
-        cmd.CommandText = sql
-        cmd.Parameters.Append cmd.CreateParameter("pFrom", DATE_PARAM_TYPE, adParamInput, 0, dFrom)
-        cmd.Parameters.Append cmd.CreateParameter("pTo", DATE_PARAM_TYPE, adParamInput, 0, dTo)
-    Else
-        cmd.CommandText = InlineDates(sql, dFrom, dTo)
-    End If
-
-    Set rs = cmd.Execute
+    Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
 
     Do Until rs.EOF
         dv = rs.Fields(FLD_DATE).Value
-        If Not IsNull(dv) Then
-            dayNo = Day(CDate(dv))
+        dayNo = ParseDayNumber(dv)
+        If dayNo > 0 Then
 
             lineKey = NormText(NzStr(rs.Fields(FLD_LINE).Value))
             If Len(FLD_SHIFT) > 0 Then
@@ -544,7 +606,37 @@ CleanFail:
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & sql
+    Err.Raise eNum, , eDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
+End Function
+
+' コマンドを組み立てて実行し、レコードセットを返す
+Private Function ExecuteQuery(ByVal cn As Object, ByVal sql As String, _
+                              ByVal dFrom As Date, ByVal dTo As Date) As Object
+    Dim cmd As Object
+
+    Set cmd = CreateObject("ADODB.Command")
+    Set cmd.ActiveConnection = cn
+    cmd.CommandType = adCmdText
+    cmd.CommandTimeout = CMD_TIMEOUT
+
+    If USE_PARAMETERS Then
+        cmd.CommandText = sql
+        cmd.Parameters.Append cmd.CreateParameter("pFrom", DATE_PARAM_TYPE, adParamInput, 0, dFrom)
+        cmd.Parameters.Append cmd.CreateParameter("pTo", DATE_PARAM_TYPE, adParamInput, 0, dTo)
+    Else
+        cmd.CommandText = InlineDates(sql, dFrom, dTo)
+    End If
+
+    Set ExecuteQuery = cmd.Execute
+End Function
+
+' 実際にDBへ渡るSQL（表示・エラーメッセージ用）
+Private Function EffectiveSql(ByVal sql As String, ByVal dFrom As Date, ByVal dTo As Date) As String
+    If USE_PARAMETERS Then
+        EffectiveSql = sql
+    Else
+        EffectiveSql = InlineDates(sql, dFrom, dTo)
+    End If
 End Function
 
 ' SQL文の組み立て
@@ -574,13 +666,18 @@ Private Function InlineDates(ByVal sql As String, ByVal dFrom As Date, ByVal dTo
     s = sql
     p = InStr(s, "?")
     If p > 0 Then
-        s = Left$(s, p - 1) & Format$(dFrom, DATE_LITERAL_FMT) & Mid$(s, p + 1)
+        s = Left$(s, p - 1) & DateLiteral(dFrom) & Mid$(s, p + 1)
         p = InStr(s, "?")
         If p > 0 Then
-            s = Left$(s, p - 1) & Format$(dTo, DATE_LITERAL_FMT) & Mid$(s, p + 1)
+            s = Left$(s, p - 1) & DateLiteral(dTo) & Mid$(s, p + 1)
         End If
     End If
     InlineDates = s
+End Function
+
+' 日付1つ分のリテラルを作る
+Private Function DateLiteral(ByVal d As Date) As String
+    DateLiteral = Replace(DATE_LITERAL_TEMPLATE, "<DATE>", Format$(d, DATE_FORMAT))
 End Function
 
 ' 取得が必要なDB列（重複除去）
@@ -743,6 +840,25 @@ End Function
 ' 取り込み先シートを取得
 '   SHEET_NAME が空 : アクティブシート
 '   指定あり        : マクロのあるブック → 見つからなければアクティブブック の順に探す
+' 年月セルから対象期間（月初〜翌月初）を求める
+Private Sub GetPeriod(ByRef dFrom As Date, ByRef dTo As Date)
+    Dim ws As Worksheet, yy As Long, mm As Long
+
+    Set ws = GetTargetSheet()
+    yy = ReadYear(ws.Range(YEAR_CELL))
+    mm = ReadMonth(ws.Range(MONTH_CELL))
+
+    If yy < 1900 Or yy > 2999 Then
+        Err.Raise vbObjectError + 1, , "年セル(" & YEAR_CELL & ")から年を読み取れませんでした。"
+    End If
+    If mm < 1 Or mm > 12 Then
+        Err.Raise vbObjectError + 2, , "月セル(" & MONTH_CELL & ")から月を読み取れませんでした。"
+    End If
+
+    dFrom = DateSerial(yy, mm, 1)
+    dTo = DateSerial(yy, mm + 1, 1)
+End Sub
+
 Private Function GetTargetSheet() As Worksheet
     Dim ws As Worksheet
 
@@ -827,6 +943,31 @@ Private Function CellText(ByVal cel As Range) As String
         CellText = ""
     Else
         CellText = CStr(v)
+    End If
+End Function
+
+' 日付列の値から「日」を取り出す
+'   日付型 / "2026-07-01" / "2026/07/01" / "20260701"（文字列・数値）に対応
+Private Function ParseDayNumber(ByVal v As Variant) As Long
+    Dim t As String, i As Long, ch As String, digits As String, n As Long
+
+    If IsNull(v) Or IsEmpty(v) Then Exit Function
+    If IsError(v) Then Exit Function
+
+    If IsDate(v) Then
+        ParseDayNumber = Day(CDate(v))
+        Exit Function
+    End If
+
+    t = NormText(CStr(v))
+    For i = 1 To Len(t)
+        ch = Mid$(t, i, 1)
+        If ch >= "0" And ch <= "9" Then digits = digits & ch
+    Next i
+
+    If Len(digits) >= 8 Then
+        n = CLng(Mid$(digits, 7, 2))       ' YYYYMMDD の DD
+        If n >= 1 And n <= 31 Then ParseDayNumber = n
     End If
 End Function
 

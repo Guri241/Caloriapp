@@ -37,13 +37,55 @@ Attribute VB_Name = "modDbImport"
 
 | 定数 | 内容 |
 | --- | --- |
-| `CONN_STR` | 接続文字列。SQL Server / Access / Oracle / ODBC の例をコメントに記載 |
-| `TABLE_NAME` | 取得元のテーブルまたはビュー名 |
-| `QUOTE_OPEN` / `QUOTE_CLOSE` | 識別子の引用符。SQL Server・Access は `[` `]`、Oracle/PostgreSQL は `"`、MySQL は `` ` ``、不要なら空文字 |
+| `CONN_STR` | 接続文字列。既定は **Dr.Sum への ODBC 接続**（下記参照） |
+| `TABLE_NAME` | 取得元のテーブルまたはビュー名。Dr.Sum は `dbo.` などのスキーマ修飾を付けません |
+| `QUOTE_OPEN` / `QUOTE_CLOSE` | 識別子の引用符。**Dr.Sum は空文字のままが無難**（他DBの場合 SQL Server・Access は `[` `]`、Oracle/PostgreSQL は `"`、MySQL は `` ` ``） |
 | `SQL_OVERRIDE` | SQL を自分で書く場合に指定（空なら自動生成）。日付条件は `>= ?` と `< ?` の2つの `?` をこの順で入れる |
-| `USE_PARAMETERS` | `True` = 日付をパラメータで渡す（推奨）／`False` = SQL に日付リテラルを埋め込む |
-| `DATE_LITERAL_FMT` | `USE_PARAMETERS = False` のときの日付書式 |
-| `DATE_PARAM_TYPE` | 日付パラメータ型。型エラーが出る場合は `adDBTimeStamp` に変更 |
+| `USE_PARAMETERS` | `False`（既定）= SQL に日付リテラルを埋め込む／`True` = 日付をパラメータで渡す。**Dr.Sum の ODBC では `False` が確実** |
+| `DATE_FORMAT` / `DATE_LITERAL_TEMPLATE` | 日付リテラルの作り方（下記「日付の書式」参照） |
+| `DATE_PARAM_TYPE` | `USE_PARAMETERS = True` のときの日付パラメータ型。型エラーが出る場合は `adDBTimeStamp` に変更 |
+
+#### Dr.Sum への接続
+
+**方法1: DSN を作って指定（推奨）**
+
+1. Windows の **ODBC データ ソース アドミニストレーター** を開く
+   * Excel が 32bit なら **32ビット版**、64bit なら **64ビット版** を使うこと
+     （Excelのビット数は「ファイル → アカウント → Excel のバージョン情報」で確認）
+2. 「システム DSN」または「ユーザー DSN」→ 追加 → Dr.Sum のドライバーを選択
+3. サーバー名・ポート・データベース名を設定して DSN 名を付ける
+4. マクロ側に DSN 名を書く
+
+```vba
+Private Const CONN_STR As String = "Provider=MSDASQL;DSN=DRSUM;UID=ユーザーID;PWD=パスワード;"
+```
+
+**方法2: DSN を作らずドライバーを直接指定**
+
+```vba
+Private Const CONN_STR As String = _
+    "Provider=MSDASQL;Driver={Dr.Sum ODBC Driver};Server=サーバー名;Port=6001;" & _
+    "Database=DB名;UID=ユーザーID;PWD=パスワード;"
+```
+
+`Driver={...}` の名称とポート番号は導入バージョンで変わります。ODBC アドミニストレーターの
+**「ドライバー」タブに表示されている名称をそのまま**入れてください
+（例: `{Dr.Sum ODBC Driver}` / `{Dr.Sum EA ODBC Driver}` / `{Dr.Sum Ver.5.5 ODBC Driver}`）。
+
+#### 日付の書式（`DATE_FORMAT` / `DATE_LITERAL_TEMPLATE`）
+
+`WHERE 日付 >= ? AND 日付 < ?` の `?` に埋め込むリテラルを、Dr.Sum 側の日付列の持ち方に合わせて選びます。
+`<DATE>` の部分に `DATE_FORMAT` で整形した文字列が入ります。
+
+| Dr.Sum の日付列 | `DATE_LITERAL_TEMPLATE` | `DATE_FORMAT` | 生成される条件 |
+| --- | --- | --- | --- |
+| 日付型（既定） | `"'<DATE>'"` | `"yyyy-mm-dd"` | `>= '2026-07-01'` |
+| 日付型（スラッシュ） | `"'<DATE>'"` | `"yyyy/mm/dd"` | `>= '2026/07/01'` |
+| 文字列 `YYYYMMDD` | `"'<DATE>'"` | `"yyyymmdd"` | `>= '20260701'` |
+| 数値 `YYYYMMDD` | `"<DATE>"` | `"yyyymmdd"` | `>= 20260701` |
+| ODBCエスケープ | `"{d '<DATE>'}"` | `"yyyy-mm-dd"` | `>= {d '2026-07-01'}` |
+
+取得後の「日」の取り出しは、日付型・`2026-07-01`・`2026/07/01`・`20260701`（文字列/数値）のいずれにも対応しています。
 
 自動生成される SQL は次の形です（`ShowGeneratedSql` で確認できます）。
 
@@ -124,6 +166,7 @@ AddMap m, "8020", "L8020"
 | --- | --- |
 | `ImportFromDb` | **メイン。** 年月セルの月を対象に DB から取得してシートへ書き込む |
 | `TestConnection` | 接続文字列の疎通確認 |
+| `TestQuery` | **試し取得。** シートには書き込まず、件数・先頭3件の中身・実際の SQL を表示（Dr.Sum の設定確認用） |
 | `ShowGeneratedSql` | 実際に投げる SQL を表示 |
 | `ClearImportArea` | 取り込み対象欄のみクリア（数式セルは残す） |
 
@@ -152,11 +195,13 @@ AddMap m, "8020", "L8020"
 | --- | --- |
 | 「ブロック見出しが見つかりません」 | 対象シートがアクティブか、`SCAN_START_ROW` と `LINE_LIST` の設備番号が実際のA列の表記と合っているか確認 |
 | 日付の列が1日ずれる | `FIRST_DATA_COL` を確認（B列始まりなら `2`）。日付行が入っている表なら `DAY_COL_MODE = "HEADER"` でも可 |
-| レコード0件 | `ShowGeneratedSql` で SQL を確認し、`A1`/`B1` の年月と DB の日付範囲を確認 |
+| レコード0件 | `TestQuery` で件数と SQL を確認。0件なら年月・テーブル名・日付書式（`DATE_LITERAL_TEMPLATE`）を見直す |
+| `[Microsoft][ODBC Driver Manager] データ ソース名および指定された既定のドライバーが見つかりません` | DSN の**ビット数**が Excel と違う。32bit Excel なら 32ビット版アドミニストレーターで DSN を作り直す |
+| ログイン／認証エラー | `UID` / `PWD` を確認。DSN 側に保存している場合は接続文字列から外しても可 |
+| 日付の比較でエラー・0件 | 上の「日付の書式」の表から、Dr.Sum の日付列の型に合う組み合わせに変更 |
 | 一部の行だけ空のまま | メッセージの「対応表に無い項目名」を確認し、`BuildFieldMap` に追加 |
 | 値が入らないブロックがある | 設備番号・直区分の表記が DB と違う可能性。`BuildLineMap` / `BuildShiftMap` で読み替えを登録 |
-| パラメータの型エラー | `DATE_PARAM_TYPE` を `adDBTimeStamp` に変更、または `USE_PARAMETERS = False` にして `DATE_LITERAL_FMT` を DB に合わせる |
-| `?` が使えないプロバイダ | `USE_PARAMETERS = False` にする |
+| パラメータ関連のエラー | 既定の `USE_PARAMETERS = False`（リテラル埋め込み）のままにする。`True` で使う場合に型エラーが出るなら `DATE_PARAM_TYPE` を `adDBTimeStamp` に変更 |
 | 数式が消える／消えない | `SKIP_FORMULA_CELLS` を切り替え |
 
 ## 6. 想定している DB 側の形
@@ -168,5 +213,6 @@ AddMap m, "8020", "L8020"
 | 2026-07-01 | 8020 | 昼 | 450 | 576 | 0 | 576 | 2 |
 | 2026-07-01 | 8020 | 夜 | 499 | 606 | 30 | 576 | 2 |
 
+Dr.Sum の場合は、Dr.Sum Datalizer / Dr.Sum Administrator 側でこの形のビューを作っておくと確実です。
 この形になっていない場合は、`SQL_OVERRIDE` に集計済みのビューや `GROUP BY` 付きの SQL を書けば、
 そのまま同じ仕組みで取り込めます（`SELECT` に 日付・設備番号・直区分 と各項目列を含めてください）。
