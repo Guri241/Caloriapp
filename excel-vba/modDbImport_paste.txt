@@ -339,6 +339,91 @@ ErrHandler:
 End Sub
 
 '------------------------------------------------------------------
+' データの中身を確認 : 日付の範囲・設備コード・直区分・品種の実際の値
+'   件数0のときや、変換設定を決めるときに使います
+'------------------------------------------------------------------
+Public Sub ShowDataSummary()
+    Dim cn As Object, msg As String
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    msg = "テーブル : " & TABLE_NAME & vbCrLf & vbCrLf
+    msg = msg & "■ 日付の範囲・全件数" & vbCrLf
+    msg = msg & QueryText(cn, "SELECT MIN(" & Q(FLD_DATE) & "), MAX(" & Q(FLD_DATE) & _
+                              "), COUNT(*) FROM " & TABLE_NAME) & vbCrLf
+
+    msg = msg & vbCrLf & "■ " & FLD_LINE & " の値" & vbCrLf
+    msg = msg & DistinctText(cn, FLD_LINE, 30) & vbCrLf
+
+    If Len(FLD_SHIFT) > 0 Then
+        msg = msg & vbCrLf & "■ " & FLD_SHIFT & " の値" & vbCrLf
+        msg = msg & DistinctText(cn, FLD_SHIFT, 10) & vbCrLf
+    End If
+
+    If SPLIT_ENABLED Then
+        msg = msg & vbCrLf & "■ " & SPLIT_COLUMN & " の値（品種）" & vbCrLf
+        msg = msg & DistinctText(cn, SPLIT_COLUMN, 30) & vbCrLf
+    End If
+
+    cn.Close
+    MsgBox msg, vbInformation, "データの概要"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    On Error Resume Next
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "エラー " & errNum & " : " & errDesc, vbCritical, "データの概要"
+End Sub
+
+' 1行だけのSQLを実行して「値 / 値 / 値」の形で返す
+Private Function QueryText(ByVal cn As Object, ByVal sql As String) As String
+    Dim rs As Object, i As Long, t As String
+    On Error GoTo Failed
+    Set rs = cn.Execute(sql)
+    If Not rs.EOF Then
+        For i = 0 To rs.Fields.Count - 1
+            If i > 0 Then t = t & "  /  "
+            t = t & NzStr(rs.Fields(i).Value)
+        Next i
+    End If
+    rs.Close
+    QueryText = t
+    Exit Function
+Failed:
+    QueryText = "(取得できませんでした: " & Err.Description & ")"
+End Function
+
+' 指定列の値を重複なしで取り出す
+Private Function DistinctText(ByVal cn As Object, ByVal colName As String, _
+                              ByVal maxCount As Long) As String
+    Dim rs As Object, t As String, n As Long
+    On Error GoTo Failed
+    Set rs = cn.Execute("SELECT DISTINCT " & Q(colName) & " FROM " & TABLE_NAME)
+    Do Until rs.EOF
+        n = n + 1
+        If n <= maxCount Then
+            If Len(t) > 0 Then t = t & ", "
+            t = t & NzStr(rs.Fields(0).Value)
+        End If
+        rs.MoveNext
+    Loop
+    rs.Close
+    If n > maxCount Then t = t & " …ほか " & (n - maxCount) & " 種"
+    If n = 0 Then t = "(データなし)"
+    DistinctText = t
+    Exit Function
+Failed:
+    DistinctText = "(取得できませんでした: " & Err.Description & ")"
+End Function
+
+'------------------------------------------------------------------
 ' 実行されるSQLを確認する
 '------------------------------------------------------------------
 Public Sub ShowGeneratedSql()
