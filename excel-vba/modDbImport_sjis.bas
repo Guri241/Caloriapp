@@ -351,9 +351,12 @@ Public Sub ShowDataSummary()
     cn.Open CONN_STR
 
     msg = "テーブル : " & TABLE_NAME & vbCrLf & vbCrLf
-    msg = msg & "■ 日付の範囲・全件数" & vbCrLf
-    msg = msg & QueryText(cn, "SELECT MIN(" & Q(FLD_DATE) & "), MAX(" & Q(FLD_DATE) & _
-                              "), COUNT(*) FROM " & TABLE_NAME) & vbCrLf
+    msg = msg & "■ 全件数" & vbCrLf
+    msg = msg & QueryText(cn, "SELECT COUNT(*) AS CNT FROM " & TABLE_NAME) & vbCrLf
+    msg = msg & vbCrLf & "■ 日付の範囲" & vbCrLf
+    msg = msg & QueryText(cn, "SELECT MIN(" & Q(FLD_DATE) & ") AS D_MIN FROM " & TABLE_NAME) & _
+                "  ～  " & _
+                QueryText(cn, "SELECT MAX(" & Q(FLD_DATE) & ") AS D_MAX FROM " & TABLE_NAME) & vbCrLf
 
     msg = msg & vbCrLf & "■ " & FLD_LINE & " の値" & vbCrLf
     msg = msg & DistinctText(cn, FLD_LINE, 30) & vbCrLf
@@ -385,6 +388,14 @@ Private Function QueryText(ByVal cn As Object, ByVal sql As String) As String
     Dim rs As Object, i As Long, t As String
     On Error GoTo Failed
     Set rs = cn.Execute(sql)
+    If rs Is Nothing Then
+        QueryText = "(結果が返りませんでした)"
+        Exit Function
+    End If
+    If rs.State = 0 Then
+        QueryText = "(結果が返りませんでした)"
+        Exit Function
+    End If
     If Not rs.EOF Then
         For i = 0 To rs.Fields.Count - 1
             If i > 0 Then t = t & "  /  "
@@ -404,6 +415,14 @@ Private Function DistinctText(ByVal cn As Object, ByVal colName As String, _
     Dim rs As Object, t As String, n As Long
     On Error GoTo Failed
     Set rs = cn.Execute("SELECT DISTINCT " & Q(colName) & " FROM " & TABLE_NAME)
+    If rs Is Nothing Then
+        DistinctText = "(結果が返りませんでした)"
+        Exit Function
+    End If
+    If rs.State = 0 Then
+        DistinctText = "(結果が返りませんでした)"
+        Exit Function
+    End If
     Do Until rs.EOF
         n = n + 1
         If n <= maxCount Then
