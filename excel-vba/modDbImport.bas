@@ -279,6 +279,52 @@ ErrHandler:
 End Sub
 
 '------------------------------------------------------------------
+' 列一覧の確認 : TABLE_NAME の列名と、先頭1件の値を表示する
+'   接続できたら最初にこれを実行し、②③④の設定に写してください
+'------------------------------------------------------------------
+Public Sub ShowColumns()
+    Const adOpenForwardOnly As Long = 0
+    Const adLockReadOnly As Long = 1
+
+    Dim cn As Object, rs As Object
+    Dim msg As String, i As Long
+
+    On Error GoTo ErrHandler
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    Set rs = CreateObject("ADODB.Recordset")
+    rs.Open "SELECT * FROM " & TABLE_NAME, cn, adOpenForwardOnly, adLockReadOnly
+
+    msg = "テーブル : " & TABLE_NAME & "（" & rs.Fields.Count & " 列）" & vbCrLf & vbCrLf
+    msg = msg & "列名  =  先頭1件の値" & vbCrLf
+    msg = msg & String(40, "-") & vbCrLf
+
+    For i = 0 To rs.Fields.Count - 1
+        msg = msg & rs.Fields(i).Name
+        If Not rs.EOF Then msg = msg & "  =  " & NzStr(rs.Fields(i).Value)
+        msg = msg & vbCrLf
+    Next i
+
+    If rs.EOF Then msg = msg & vbCrLf & "※ データが0件のため値は表示していません。"
+
+    rs.Close
+    cn.Close
+    MsgBox msg, vbInformation, "列一覧"
+    Exit Sub
+
+ErrHandler:
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "エラー " & Err.Number & " : " & Err.Description & vbCrLf & vbCrLf & _
+           "TABLE_NAME（" & TABLE_NAME & "）が正しいか確認してください。", vbCritical, "列一覧"
+End Sub
+
+'------------------------------------------------------------------
 ' 実行されるSQLを確認する
 '------------------------------------------------------------------
 Public Sub ShowGeneratedSql()
