@@ -52,7 +52,9 @@ Private Const adDBTimeStamp      As Long = 135
 '     Access     : "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\path\data.accdb;"
 '     Oracle     : "Provider=OraOLEDB.Oracle;Data Source=TNS;User Id=UID;Password=PWD;"
 Private Const CONN_STR As String = _
-    "Provider=MSDASQL;DSN=DRSUM;UID=USER_ID;PWD=PASSWORD;"
+    "Provider=MSDASQL;DSN=DSN名;UID=ユーザーID;PWD=パスワード;"
+'   ↑ ここだけは今お使いのモジュールから1行コピーして貼り替えてください
+'     （パスワードを含むためGitHub上のファイルには実値を入れていません）
 
 ' 取得元テーブル（またはビュー）名  ※Dr.Sum は dbo. などのスキーマ修飾は付けません
 Private Const TABLE_NAME As String = "V_G2contlrol"
@@ -174,7 +176,7 @@ Private Const AGGREGATE_MODE As String = "LAST"
 '   シートに無い品種が出てきた場合は、行を自動で追加して表示します。
 Private Const SPLIT_ENABLED       As Boolean = True
 Private Const SPLIT_COLUMN        As String = "SEBAN"      ' 品種を表す列（SEBAN / HINBAN_CD など）
-Private Const SPLIT_VALUE_COLUMN  As String = "KAKO_CNT"   ' 生産数の列
+Private Const SPLIT_VALUE_COLUMN  As String = "PRODUCT_CNT" ' 生産数の列（KAKO_CNT でも可）
 Private Const PRODUCT_ROW_SUFFIX  As String = "生産数"     ' 行名の末尾（「TT生産数」の「生産数」）
 Private Const PRODUCT_ROW_ANCHOR  As String = "良品数(個)" ' 品種行を差し込む基準の項目
 Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True      ' 無い品種の行を自動で追加する
@@ -207,18 +209,22 @@ Private Const SHIFT_PARTIAL_MATCH As Boolean = True
 Private Sub BuildFieldMap(ByVal m As Object)
     ' 稼働時間 : 同じ直の行に同じ値が入っているため MAX（合計しない）
     AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
-    '   ※ WORKING_HOURS を使わず開始・終了から計算する場合は下に差し替え
+    '   ※ WORKING_HOURS(例 545) は休憩を引いた実働、
+    '      開始〜終了(08:30〜19:20 = 650分) との差が休憩に当たります。
+    '      シートに入れたいのが 終了-開始 の方なら、上をコメントにして下を使ってください。
     ' AddCol m, "稼働時間", CALC_DURATION, "MAX", "", ""
 
     ' 良品数 : その日・その直の全行の合計
-    AddCol m, "良品数(個)", "KAKO_CNT", "SUM", "", ""
+    AddCol m, "良品数(個)", "PRODUCT_CNT", "SUM", "", ""
+    '   ※ 加工数を良品数として使う場合は "KAKO_CNT" に変更
 
-    ' TT / 825B・TNGA の生産数 : 品番(HINBAN_CD) か 背番号(SEBAN) で振り分けて合計
-    '   ▼ 実際の値に合わせて絞り込み値を入れ、コメントを外してください
-    ' AddCol m, "TT生産数", "KAKO_CNT", "SUM", "SEBAN", "TMC300D"
-    ' AddCol m, "825B/TNGA生産数", "KAKO_CNT", "SUM", "HINBAN_CD", "172100*"
+    ' 「〇〇生産数」の行は、品種ごとの自動集計（SPLIT_ENABLED）が担当するため
+    ' ここに書く必要はありません。⑥ BuildProductMap で表示名だけ合わせてください。
+    '   固定の条件で入れたい場合だけ、次のように書けます
+    ' AddCol m, "TT生産数", "PRODUCT_CNT", "SUM", "SEBAN", "TMC300D"
 
-    ' 基準人数(最小人数) : 該当する列があれば追加してください
+    ' 基準人数(最小人数) : V_G2contlrol に該当列が無いため取り込みません
+    ' （シートの手入力値をそのまま残します。列がある場合は下を有効化）
     ' AddCol m, "基準人数(最小人数)", "列名", "MAX", "", ""
 
     ' 「変動値」「直接時間」はシート側の計算式のため取り込みません
