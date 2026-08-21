@@ -2,266 +2,115 @@ Attribute VB_Name = "modDbImport"
 Option Explicit
 
 '==================================================================
-' modDbImport  -  DB(ADO) → 生産実績シート 取り込みマクロ
-'
-'  シート想定レイアウト（添付レイアウトと同じ形）
-'    A1 : 年 (例 2026年)      B1 : 月 (例 7月)
-'    A列 : 「8020 昼」のようなブロック見出し（先頭が設備番号）
-'          その下に「稼働時間」「良品数(個)」…などの項目名
-'    B列〜AF列 : 1日〜31日 のデータ欄
-'
-'  実行手順
-'    ① CONN_STR / TABLE_NAME を自環境に合わせる
-'    ② FLD_DATE / FLD_LINE / FLD_SHIFT にDBのキー列名を入れる
-'    ③ シートのレイアウト（取り込み先シート名など）を確認する
-'    ④ BuildFieldMap に「シートの項目名 → DBの列名」を登録する
-'    ⑤ BuildShiftMap / BuildLineMap で値の読み替えを登録する
-'   確認 : TestConnection → ShowColumns → TestQuery → ImportFromDb の順で実行
-'
-'  ※ ADO は遅延バインディング(CreateObject)のため参照設定は不要です。
+' modDbImport : DB(ADO/ODBC) → 生産実績シート 取り込み
+'   実行 : TestConnection → ShowColumns → TestQuery → ImportFromDb
+'   設定 : 下の ①〜⑥ だけ。詳細は README.md
 '==================================================================
 
-'--- ADO 定数（参照設定なしで使うためのローカル定義） ---------------
-Private Const adCmdText          As Long = 1
-Private Const adParamInput       As Long = 1
-Private Const adDate             As Long = 7
-Private Const adDBTimeStamp      As Long = 135
+Private Const adCmdText     As Long = 1
+Private Const adParamInput  As Long = 1
+Private Const adDate        As Long = 7
+Private Const adDBTimeStamp As Long = 135
 
 
-'================== ① 接続・SQL 設定 ==================
+'================== ① 接続・SQL ==================
 
-' 接続文字列 : Dr.Sum に ODBC で接続します
-'
-'   【推奨】ODBCデータソース(DSN)を作ってから、その名前を指定する方法
-'       "Provider=MSDASQL;DSN=DRSUM;UID=ユーザーID;PWD=パスワード;"
-'     ※ DSN は Windows の「ODBC データ ソース アドミニストレーター」で作成します。
-'        Excel が 32bit なら【32ビット版】、64bit なら【64ビット版】で作ること。
-'        （ビット数が違うと "データ ソース名および指定された既定のドライバーが見つかりません" になります）
-'
-'   【DSNレス】DSN を作らずドライバーを直接指定する方法
-'       "Provider=MSDASQL;Driver={Dr.Sum ODBC Driver};Server=サーバー名;Port=6001;" & _
-'       "Database=DB名;UID=ユーザーID;PWD=パスワード;"
-'     ※ Driver={...} の名前とポート番号は導入バージョンで異なります。
-'        ODBCアドミニストレーターの「ドライバー」タブに出ている名称をそのまま入れてください
-'        （例: {Dr.Sum ODBC Driver} / {Dr.Sum EA ODBC Driver} / {Dr.Sum Ver.5.5 ODBC Driver}）
-'
-'   （参考）他DBの場合
-'     SQL Server : "Provider=SQLOLEDB;Data Source=SERVER;Initial Catalog=DBNAME;User ID=UID;Password=PWD;"
-'     Access     : "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\path\data.accdb;"
-'     Oracle     : "Provider=OraOLEDB.Oracle;Data Source=TNS;User Id=UID;Password=PWD;"
+' ↓ この1行だけ実環境の値に置き換えてください
 Private Const CONN_STR As String = _
     "Provider=MSDASQL;DSN=DSN名;UID=ユーザーID;PWD=パスワード;"
-'   ↑ ここだけは今お使いのモジュールから1行コピーして貼り替えてください
-'     （パスワードを含むためGitHub上のファイルには実値を入れていません）
 
-' 取得元テーブル（またはビュー）名  ※Dr.Sum は dbo. などのスキーマ修飾は付けません
-Private Const TABLE_NAME As String = "V_G2contlrol"
+Private Const TABLE_NAME   As String = "V_G2contlrol"
+Private Const QUOTE_OPEN   As String = ""        ' 識別子の引用符（Dr.Sumは不要）
+Private Const QUOTE_CLOSE  As String = ""
+Private Const SQL_OVERRIDE As String = ""        ' 自分でSQLを書く場合（日付条件は ? を2つ）
 
-' 識別子の引用符  Dr.Sum は付けないのが無難（必要なら " " ）
-'   SQL Server / Access = [ ]   Oracle / PostgreSQL = " "   MySQL = ` `
-Private Const QUOTE_OPEN  As String = ""
-Private Const QUOTE_CLOSE As String = ""
-
-' SQLを自分で書きたい場合はここに記述（空なら TABLE_NAME から自動生成）
-'   日付範囲の条件は「>= ?」「< ?」の2つの ? を必ずこの順で入れてください。
-'   例: "SELECT 日付, 設備番号, 直区分, 稼働時間, 良品数 FROM V_生産実績 WHERE 日付 >= ? AND 日付 < ?"
-Private Const SQL_OVERRIDE As String = ""
-
-' True  : パラメータ(?)で日付を渡す
-' False : SQL文に日付リテラルを直接埋め込む（Dr.Sum ODBC はこちらが確実。既定）
-Private Const USE_PARAMETERS As Boolean = False
-
-' 日付リテラルの作り方（USE_PARAMETERS = False のとき）
-'   DATE_FORMAT          : 日付を文字にする書式
-'   DATE_LITERAL_TEMPLATE: <DATE> の部分に上の書式の文字列が入ります
-'
-'   ▼ Dr.Sum の日付列の持ち方に合わせて選んでください
-'     日付型            : "'<DATE>'"        + "yyyy-mm-dd"   ← 既定
-'     日付型(スラッシュ): "'<DATE>'"        + "yyyy/mm/dd"
-'     文字列 YYYYMMDD   : "'<DATE>'"        + "yyyymmdd"
-'     数値   YYYYMMDD   : "<DATE>"          + "yyyymmdd"
-'     ODBCエスケープ    : "{d '<DATE>'}"    + "yyyy-mm-dd"
-'   （参考）Access : "#<DATE>#" / Oracle : "TO_DATE('<DATE>','YYYY-MM-DD')"
+Private Const USE_PARAMETERS        As Boolean = False
 Private Const DATE_FORMAT           As String = "yyyy-mm-dd"
 Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
-
-' 日付パラメータの型（USE_PARAMETERS = True のとき）。エラー時は adDBTimeStamp に変更
-Private Const DATE_PARAM_TYPE As Long = adDate
-
-' クエリのタイムアウト（秒）
-Private Const CMD_TIMEOUT As Long = 120
+Private Const DATE_PARAM_TYPE       As Long = adDate
+Private Const CMD_TIMEOUT           As Long = 120
 
 
 '================== ② DBのキー列名 ==================
 
-Private Const FLD_DATE  As String = "LINE_DATE"   ' 日付（1日単位）
-Private Const FLD_LINE  As String = "LINE_CD"     ' 設備コード
-Private Const FLD_SHIFT As String = "TYOKUKBN"    ' 直区分（1=昼 / 2=夜）
+Private Const FLD_DATE  As String = "LINE_DATE"
+Private Const FLD_LINE  As String = "LINE_CD"
+Private Const FLD_SHIFT As String = "TYOKUKBN"          ' 1=昼 / 2=夜。無ければ ""
 
-' 直区分がDBに無い（設備番号だけで一意）の場合は、下を "" にしてください。
-' その場合シート側の見出しの「昼/夜」等は無視して設備番号だけで突き合わせます。
-'   例: Private Const FLD_SHIFT As String = ""
-
-'--- 稼働時間の計算（DBに稼働時間の列が無く、開始・終了から求める場合）-----
-'   ④の BuildFieldMap で  AddMap m, "稼働時間", CALC_DURATION  と書くと、
-'   下の設定にしたがって 終了 − 開始 を計算した値を入れます。
-Private Const FLD_START As String = "LINE_START_TIME"   ' 開始のカラム名
-Private Const FLD_END   As String = "LINE_END_TIME"     ' 終了のカラム名
-
-' 休憩時間の差し引き
-'   FLD_BREAK  : 休憩(分)が入っているカラム名。無ければ "" にする
-'   BREAK_MINUTES : FLD_BREAK が "" のときに一律で引く分数（引かないなら 0）
-Private Const FLD_BREAK     As String = ""
-Private Const BREAK_MINUTES As Long = 0
-
-' 計算結果の単位と小数桁  "MINUTE"(分) / "HOUR"(時間)
-'   シートの稼働時間が 450 のような分表記なら "MINUTE" + 0桁
-Private Const DURATION_UNIT     As String = "MINUTE"
+' 稼働時間を 終了-開始 で計算する場合のみ使用（CALC_DURATION 指定時）
+Private Const FLD_START         As String = "LINE_START_TIME"
+Private Const FLD_END           As String = "LINE_END_TIME"
+Private Const FLD_BREAK         As String = ""          ' 休憩(分)の列
+Private Const BREAK_MINUTES     As Long = 0             ' 一律で引く分数
+Private Const DURATION_UNIT     As String = "MINUTE"    ' "MINUTE" / "HOUR"
 Private Const DURATION_DECIMALS As Long = 0
-
-' BuildFieldMap で「計算で求める」ことを表す印（変更不要）
-Private Const CALC_DURATION As String = "<稼働時間=終了-開始>"
+Private Const CALC_DURATION     As String = "<稼働時間=終了-開始>"
 
 
-'================== ③ シートのレイアウト設定 ==================
+'================== ③ シートのレイアウト ==================
 
-Private Const SHEET_NAME     As String = "Sub吸い上げ"  ' 取り込み先シート（空ならアクティブシート）
-Private Const YEAR_CELL      As String = "A1"  ' 年
-Private Const MONTH_CELL     As String = "B1"  ' 月
-Private Const FIRST_DATA_COL As Long = 2       ' B列 = 1日
-Private Const LAST_DATA_COL  As Long = 32      ' AF列 = 31日
-Private Const SCAN_START_ROW As Long = 2       ' 見出し探索の開始行（1行目は年月なので除外）
-Private Const SCAN_END_ROW   As Long = 0       ' 0 = A列の最終行まで（0のままでOK）
+Private Const SHEET_NAME     As String = "Sub吸い上げ"
+Private Const YEAR_CELL      As String = "A1"
+Private Const MONTH_CELL     As String = "B1"
+Private Const FIRST_DATA_COL As Long = 2        ' B列 = 1日
+Private Const LAST_DATA_COL  As Long = 32       ' AF列 = 31日
+Private Const SCAN_START_ROW As Long = 2
+Private Const SCAN_END_ROW   As Long = 0        ' 0 = A列の最終行まで
 
-'--- ブロック見出し行の判定方法 -----------------------------------
-' セルに数値データが1件も入っていない空の表でも判定できるよう、
-' 判定は「A列の文字（見出し・項目名）」だけで行います。
-'
-' LINE_LIST : 設備番号をカンマ区切りで列挙すると、その番号で始まる行だけを
-'             ブロック見出しとみなします（最も確実。例 "8020,8021,8022"）。
-'             空にした場合は「A列の文字が LINE_DIGITS_MIN 桁以上の数字で始まる行」
-'             を見出しとみなします。
-Private Const LINE_LIST       As String = "8020,8021,8022"
-Private Const LINE_DIGITS_MIN As Long = 3
+Private Const LINE_LIST           As String = "8020,8021,8022"  ' ブロック見出しの設備番号
+Private Const LINE_DIGITS_MIN     As Long = 3
+Private Const LINE_CODE_PREFIX    As String = "AS"              ' 8020 → AS8020
+Private Const SHIFT_PARTIAL_MATCH As Boolean = True             ' 「ﾃﾚｽｺ昼」→「昼」で判定
 
-'--- 日付(1〜31)の列の決め方 --------------------------------------
-'  "POSITION" : 列の位置で決める（FIRST_DATA_COL = 1日、以降 1列 = 1日）
-'               ← 表が空でも使えるため既定
-'  "HEADER"   : 各ブロックの見出し行に入っている 1〜31 の数字を読む
-'               （数字が無いブロックは POSITION で補完）
-'  "DATEROW"  : DAY_HEADER_ROW で指定した1行だけを読み、全ブロックで使う
-'               （数字が無ければ POSITION で補完）
-Private Const DAY_COL_MODE   As String = "POSITION"
-Private Const DAY_HEADER_ROW As Long = 0       ' "DATEROW" のときの行番号
+Private Const DAY_COL_MODE   As String = "POSITION"  ' "POSITION" / "HEADER" / "DATEROW"
+Private Const DAY_HEADER_ROW As Long = 0
 
-' 月末を超える日の列（30日までの月の31日列など）は書き込まない
-Private Const LIMIT_TO_MONTH_END   As Boolean = True
-' 月末を超える日の列の内容をクリアする（前月の値が残る場合に True）
-Private Const CLEAR_BEYOND_MONTH_END As Boolean = False
-' 見出し行の日付欄に 1〜月末 を書き込む（日付行も空の新規表で使う）
-Private Const WRITE_DAY_HEADERS    As Boolean = False
+Private Const LIMIT_TO_MONTH_END      As Boolean = True
+Private Const CLEAR_BEYOND_MONTH_END  As Boolean = False
+Private Const WRITE_DAY_HEADERS       As Boolean = False
+Private Const SKIP_FORMULA_CELLS      As Boolean = True
+Private Const WRITE_ZERO_WHEN_MISSING As Boolean = False
+Private Const CLEAR_BEFORE_IMPORT     As Boolean = False
+Private Const AGGREGATE_MODE          As String = "LAST"
 
-Private Const SKIP_FORMULA_CELLS     As Boolean = True   ' 数式セルは上書きしない
-Private Const WRITE_ZERO_WHEN_MISSING As Boolean = False ' DBに該当日が無いとき0を書く
-Private Const CLEAR_BEFORE_IMPORT     As Boolean = False ' 取込前に対象欄をクリアする
-
-' 同じ 日付×設備×直 のレコードが複数ある場合の扱い  "LAST"(後勝ち) / "SUM"(合計)
-Private Const AGGREGATE_MODE As String = "LAST"
-
-'--- 品種別の生産数を自動で行にする -------------------------------
-'   1日 × 設備 × 直 の中に品種（背番号・品番）ごとの行があるため、
-'   品種ごとに合計して「〇〇生産数」の行へ入れます。
-'   シートに無い品種が出てきた場合は、行を自動で追加して表示します。
-Private Const SPLIT_ENABLED       As Boolean = True
-Private Const SPLIT_COLUMN        As String = "SEBAN"      ' 品種を表す列（SEBAN / HINBAN_CD など）
-Private Const SPLIT_VALUE_COLUMN  As String = "PRODUCT_CNT" ' 生産数の列（KAKO_CNT でも可）
-Private Const PRODUCT_ROW_SUFFIX  As String = "生産数"     ' 行名の末尾（「TT生産数」の「生産数」）
-Private Const PRODUCT_ROW_ANCHOR  As String = "良品数(個)" ' 品種行を差し込む基準の項目
-Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True      ' 無い品種の行を自動で追加する
-Private Const SPLIT_PREFIX        As String = "<品種>"     ' 内部処理用（変更不要）
-
-' 設備コードの接頭辞。BuildLineMap に登録が無い設備番号に自動で付けます。
-'   既定の "AS" で、シートの 8020 → DBの LINE_CD "AS8020" を探します
-'       接頭辞を付けない場合は "" にしてください
-Private Const LINE_CODE_PREFIX As String = "AS"
-
-' 区分（昼/夜）の突き合わせで、完全一致しないときに「昼」「夜」を含むかで判定する
-' 例: シート「ﾃﾚｽｺ昼」→ BuildShiftMap の「昼」の変換値を使う
-Private Const SHIFT_PARTIAL_MATCH As Boolean = True
+' 品種別の生産数（「〇〇生産数」の行。無い品種は行を自動追加）
+Private Const SPLIT_ENABLED         As Boolean = True
+Private Const SPLIT_COLUMN          As String = "SEBAN"
+Private Const SPLIT_VALUE_COLUMN    As String = "PRODUCT_CNT"
+Private Const PRODUCT_ROW_SUFFIX    As String = "生産数"
+Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)"
+Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
+Private Const SPLIT_PREFIX          As String = "<品種>"
 
 
-'================== ④ 項目名 → DB列名 の対応 ==================
-' 1日 × 設備 × 直 に対してDBの行が複数ある（品番ごとに行が分かれる）ため、
-' 項目ごとに「どの列を」「どう集計するか」「どの行だけ対象にするか」を指定します。
-'
-'   AddCol m, シートの項目名, DBの列名, 集計方法, 絞り込み列, 絞り込み値
-'
-'     集計方法 : "SUM"(合計) / "MAX"(最大) / "MIN"(最小) / "COUNT"(件数)
-'                "LAST"(最後の行) / "FIRST"(最初の行)
-'     絞り込み : 使わないなら "" , ""
-'                値はカンマ区切りで複数可。末尾 * で前方一致、前後 * で部分一致
-'                例) "TMC300D,TMC301D" / "172100*" / "*TNGA*"
-'
-'   AddMap m, シートの項目名, DBの列名   … 集計 "LAST"、絞り込み無しの短い書き方
-'   稼働時間を開始・終了から計算する場合は DBの列名に CALC_DURATION を指定します
+'================== ④ 項目名 → DB列名 ==================
+'   AddCol m, シートの項目名, DB列名, 集計, 絞り込み列, 絞り込み値
+'     集計 : SUM / MAX / MIN / COUNT / LAST / FIRST
+'     絞り込み値 : カンマ区切り。末尾 * で前方一致、前後 * で部分一致
 Private Sub BuildFieldMap(ByVal m As Object)
-    ' 稼働時間 : 同じ直の行に同じ値が入っているため MAX（合計しない）
     AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
-    '   ※ WORKING_HOURS(例 545) は休憩を引いた実働、
-    '      開始〜終了(08:30〜19:20 = 650分) との差が休憩に当たります。
-    '      シートに入れたいのが 終了-開始 の方なら、上をコメントにして下を使ってください。
-    ' AddCol m, "稼働時間", CALC_DURATION, "MAX", "", ""
-
-    ' 良品数 : その日・その直の全行の合計
-    AddCol m, "良品数(個)", "PRODUCT_CNT", "SUM", "", ""
-    '   ※ 加工数を良品数として使う場合は "KAKO_CNT" に変更
-
-    ' 「〇〇生産数」の行は、品種ごとの自動集計（SPLIT_ENABLED）が担当するため
-    ' ここに書く必要はありません。⑥ BuildProductMap で表示名だけ合わせてください。
-    '   固定の条件で入れたい場合だけ、次のように書けます
-    ' AddCol m, "TT生産数", "PRODUCT_CNT", "SUM", "SEBAN", "TMC300D"
-
-    ' 基準人数(最小人数) : V_G2contlrol に該当列が無いため取り込みません
-    ' （シートの手入力値をそのまま残します。列がある場合は下を有効化）
+    AddCol m, "良品数(個)", "KAKO_CNT", "SUM", "", ""
     ' AddCol m, "基準人数(最小人数)", "列名", "MAX", "", ""
-
-    ' 「変動値」「直接時間」はシート側の計算式のため取り込みません
 End Sub
 
 
-'================== ⑤ 値の読み替え（必要な場合だけ） ==================
-
-' シート見出しの区分表記 → DBの直区分の値
-'   DBの直区分が 1=昼 / 2=夜 の数字で入ってくるため、下のように変換します。
-'   「8022 ﾃﾚｽｺ 昼」のように区分名が付く見出しは、完全一致で見つからない場合に
-'   SHIFT_PARTIAL_MATCH = True なら「昼」を含むかどうかで判定します。
+'================== ⑤ 値の読み替え ==================
+' シートの表記 → DBに入っている値
 Private Sub BuildShiftMap(ByVal m As Object)
     AddMap m, "昼", "1"
     AddMap m, "夜", "2"
-
-    ' 昼夜の区別が無いブロック（例: 8022 ｽﾗｲﾀﾞ）は、DBに入っている値を個別に登録してください。
     ' AddMap m, "スライダ", "1"
-
-    ' 個別に固定したい場合は完全一致で先に登録できます（部分一致より優先されます）
-    ' AddMap m, "テレスコ昼", "1"
-    ' AddMap m, "テレスコ夜", "2"
 End Sub
 
-' シート見出しの設備番号 → DBの設備番号の値
-' 例) シート「8020」 に対して DB が "L8020" なら  AddMap m, "8020", "L8020"
 Private Sub BuildLineMap(ByVal m As Object)
-    ' AddMap m, "8020", "L8020"
+    ' AddMap m, "8020", "AS8046"      ' LINE_CODE_PREFIX で足りない場合だけ
 End Sub
 
 
 '================== ⑥ 品種の表示名 ==================
-' DBの品種コード（SPLIT_COLUMN の値） → シートの行名に使う表示名
-'   例) 背番号 "TMC300D" を「TT生産数」の行に入れたい場合  AddMap m, "TMC300D", "TT"
-'   登録が無い品種は、コードをそのまま行名に使い、行が無ければ自動で追加します
-'       （"TMC825D" → 「TMC825D生産数」の行を作成）
+' DBの品種コード → 行名に使う表示名（未登録はコードをそのまま行名にする）
 Private Sub BuildProductMap(ByVal m As Object)
     ' AddMap m, "TMC300D", "TT"
-    ' AddMap m, "TMC825B", "825B/TNGA"
 End Sub
 
 

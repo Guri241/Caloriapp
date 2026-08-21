@@ -158,10 +158,6 @@ Private Sub BuildFieldMap(ByVal m As Object)
 
     ' その日・その直の全行を合計
     AddCol m, "良品数(個)", "KAKO_CNT", "SUM", "", ""
-
-    ' 品番・背番号で振り分けて合計
-    AddCol m, "TT生産数", "KAKO_CNT", "SUM", "SEBAN", "TMC300D"
-    AddCol m, "825B/TNGA生産数", "KAKO_CNT", "SUM", "HINBAN_CD", "172100*"
 End Sub
 ```
 
@@ -174,13 +170,14 @@ End Sub
 
 ### 品種ごとの生産数（行の自動追加）
 
+良品数は `KAKO_CNT` の合計、品種別の生産数は `PRODUCT_CNT` の合計です。
 1日・1直の中に品種（背番号／品番）ごとの行があるため、**品種ごとに合計**して
 `〇〇生産数` という行に入れます。**シートに無い品種が出てきた場合は行を自動で追加**します。
 
 ```vba
 Private Const SPLIT_ENABLED         As Boolean = True
 Private Const SPLIT_COLUMN          As String = "SEBAN"      ' 品種を表す列
-Private Const SPLIT_VALUE_COLUMN    As String = "KAKO_CNT"   ' 生産数の列
+Private Const SPLIT_VALUE_COLUMN    As String = "PRODUCT_CNT" ' 品種別の生産数の列
 Private Const PRODUCT_ROW_SUFFIX    As String = "生産数"     ' 行名の末尾
 Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)" ' 追加位置の基準
 Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
