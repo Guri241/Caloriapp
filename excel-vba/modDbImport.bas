@@ -94,6 +94,9 @@ Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)"
 Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
 Private Const SPLIT_PREFIX          As String = "<品種>"
 
+' 試験用 : 取り込む日数を制限する（0 = 制限なし）
+Private Const MAX_IMPORT_DAYS As Long = 0
+
 ' 取得用の作業シート名（処理後に削除します）
 Private Const TEMP_SHEET_NAME As String = "_DB取得作業"
 
@@ -865,7 +868,7 @@ Private Function FetchViaQueryTable(ByVal dFrom As Date, ByVal dTo As Date, _
     Dim ws As Worksheet, qt As Object
     Dim cache As Object, specs As Object, idx As Object
     Dim sql As String, chunkFrom As Date, chunkTo As Date
-    Dim data As Variant
+    Dim data As Variant, dayCount As Long
 
     Set cache = NewDict()
     Set specs = UniqueSpecs(fieldMap)
@@ -875,6 +878,7 @@ Private Function FetchViaQueryTable(ByVal dFrom As Date, ByVal dTo As Date, _
     Set ws = NewTempSheet(TEMP_SHEET_NAME)
 
     On Error GoTo CleanUp
+    Application.EnableCancelKey = xlErrorHandler      ' Ctrl+Break で中断できるように
 
     Set qt = ws.QueryTables.Add(Connection:="ODBC;" & OdbcConnStr(), Destination:=ws.Range("A1"))
     qt.BackgroundQuery = False
@@ -889,7 +893,12 @@ Private Function FetchViaQueryTable(ByVal dFrom As Date, ByVal dTo As Date, _
         End If
         If chunkTo > dTo Then chunkTo = dTo
 
-        Application.StatusBar = "DBから取得中… " & Format$(chunkFrom, "m/d")
+        dayCount = dayCount + 1
+        Application.StatusBar = "DBから取得中… " & Format$(chunkFrom, "m/d") & _
+                                "（" & dayCount & "/" & DateDiff("d", dFrom, dTo) & "日目  " & _
+                                Format$(recCount, "#,##0") & "件）"
+        DoEvents
+
         qt.CommandText = InlineDates(sql, chunkFrom, chunkTo)
         qt.Refresh
 
@@ -900,6 +909,7 @@ Private Function FetchViaQueryTable(ByVal dFrom As Date, ByVal dTo As Date, _
         End If
 
         chunkFrom = chunkTo
+        If MAX_IMPORT_DAYS > 0 And dayCount >= MAX_IMPORT_DAYS Then Exit Do
     Loop
 
 CleanUp:
@@ -936,49 +946,95 @@ Private Function HeaderIndex(ByVal data As Variant) As Object
 End Function
 
 ' 取り込んだ表を集計してキャッシュに積む
+'   1行ごとの設定解析を避けるため、列番号と条件を先に配列へ展開してから回します
 Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs As Object, _
                         ByVal productMap As Object, ByVal splits As Object, _
                         ByVal cache As Object, ByRef recCount As Long)
-    Dim r As Long, k As Variant, spec As String
+    Dim r As Long, i As Long, n As Long, k As Variant
     Dim dayNo As Long, lineKey As String, shiftKey As String, keyBase As String
-    Dim val As Variant, filterCol As String
+    Dim val As Variant
     Dim prodRaw As String, prodName As String, prodKey As String, blockKey As String
     Dim prodList As Object
 
+    Dim iDate As Long, iLine As Long, iShift As Long
+    Dim iSplit As Long, iSplitVal As Long, iStart As Long, iEnd As Long, iBreak As Long
+
+    Dim sSpec() As String, sAgg() As String
+    Dim sCol() As Long, sFilter() As Long, sIsCalc() As Boolean
+    Dim sPats() As Variant, pats As Variant
+
+    iDate = IdxOf(idx, FLD_DATE)
+    iLine = IdxOf(idx, FLD_LINE)
+    iShift = IdxOf(idx, FLD_SHIFT)
+    iSplit = IdxOf(idx, SPLIT_COLUMN)
+    iSplitVal = IdxOf(idx, SPLIT_VALUE_COLUMN)
+    iStart = IdxOf(idx, FLD_START)
+    iEnd = IdxOf(idx, FLD_END)
+    iBreak = IdxOf(idx, FLD_BREAK)
+    If iDate = 0 Or iLine = 0 Then Exit Sub
+
+    ' --- 項目の設定を配列へ展開（ここで1回だけ解析する）---
+    n = specs.Count
+    ReDim sSpec(1 To n): ReDim sAgg(1 To n)
+    ReDim sCol(1 To n): ReDim sFilter(1 To n): ReDim sIsCalc(1 To n): ReDim sPats(1 To n)
+
+    i = 0
+    For Each k In specs.Keys
+        i = i + 1
+        sSpec(i) = CStr(k)
+        sAgg(i) = SpecPart(sSpec(i), 1)
+        sIsCalc(i) = IsCalcColumn(SpecPart(sSpec(i), 0))
+        If sIsCalc(i) Then
+            sCol(i) = 0
+        Else
+            sCol(i) = IdxOf(idx, SpecPart(sSpec(i), 0))
+        End If
+        sFilter(i) = IdxOf(idx, SpecPart(sSpec(i), 2))
+        sPats(i) = NormPatterns(SpecPart(sSpec(i), 3))
+    Next k
+
+    ' --- 行の処理 ---
     For r = LBound(data, 1) + 1 To UBound(data, 1)
-        dayNo = ParseDayNumber(CellOf(data, idx, r, FLD_DATE))
+        dayNo = ParseDayNumber(data(r, iDate))
         If dayNo > 0 Then
-            lineKey = NormText(NzStr(CellOf(data, idx, r, FLD_LINE)))
-            If Len(FLD_SHIFT) > 0 Then
-                shiftKey = NormText(NzStr(CellOf(data, idx, r, FLD_SHIFT)))
+            lineKey = NormText(NzStr(data(r, iLine)))
+            If iShift > 0 Then
+                shiftKey = NormText(NzStr(data(r, iShift)))
             Else
                 shiftKey = ""
             End If
             keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
 
-            For Each k In specs.Keys
-                spec = CStr(k)
-                filterCol = SpecPart(spec, 2)
-                If Len(filterCol) = 0 Or SpecMatchesValue(spec, NzStr(CellOf(data, idx, r, filterCol))) Then
-                    If IsCalcColumn(SpecPart(spec, 0)) Then
-                        val = CalcDurationFrom(CellOf(data, idx, r, FLD_START), _
-                                               CellOf(data, idx, r, FLD_END), _
-                                               CellOf(data, idx, r, FLD_BREAK))
+            For i = 1 To n
+                If sFilter(i) = 0 Then
+                    val = 1                                     ' 絞り込み無し
+                ElseIf MatchPatterns(NzStr(data(r, sFilter(i))), sPats(i)) Then
+                    val = 1
+                Else
+                    val = 0
+                End If
+
+                If val = 1 Then
+                    If sIsCalc(i) Then
+                        val = CalcDurationFrom(ValAt(data, r, iStart), ValAt(data, r, iEnd), _
+                                               ValAt(data, r, iBreak))
+                    ElseIf sCol(i) > 0 Then
+                        val = data(r, sCol(i))
                     Else
-                        val = CellOf(data, idx, r, SpecPart(spec, 0))
+                        val = Null
                     End If
                     If Not IsNull(val) And Not IsEmpty(val) Then
-                        Accumulate cache, keyBase & spec, val, SpecPart(spec, 1)
+                        Accumulate cache, keyBase & sSpec(i), val, sAgg(i)
                     End If
                 End If
-            Next k
+            Next i
 
-            If SPLIT_ENABLED Then
-                prodRaw = NzStr(CellOf(data, idx, r, SPLIT_COLUMN))
+            If SPLIT_ENABLED And iSplit > 0 And iSplitVal > 0 Then
+                prodRaw = NzStr(data(r, iSplit))
                 If Len(Trim$(prodRaw)) > 0 Then
                     prodName = MapValue(productMap, prodRaw)
                     prodKey = NormText(prodName)
-                    val = CellOf(data, idx, r, SPLIT_VALUE_COLUMN)
+                    val = data(r, iSplitVal)
                     If Not IsNull(val) And Not IsEmpty(val) Then
                         Accumulate cache, keyBase & SPLIT_PREFIX & prodKey, val, "SUM"
                     End If
@@ -986,7 +1042,7 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
                     blockKey = lineKey & "|" & shiftKey
                     If Not splits.Exists(blockKey) Then Set splits(blockKey) = NewDict()
                     Set prodList = splits(blockKey)
-                    prodList(prodKey) = prodName
+                    If Not prodList.Exists(prodKey) Then prodList(prodKey) = prodName
                 End If
             End If
 
@@ -995,12 +1051,56 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
     Next r
 End Sub
 
-' 取り込んだ表から列名で値を取り出す（無い列は Empty）
-Private Function CellOf(ByVal data As Variant, ByVal idx As Object, ByVal r As Long, _
-                        ByVal colName As String) As Variant
+' 列名 → 列番号（無ければ 0）
+Private Function IdxOf(ByVal idx As Object, ByVal colName As String) As Long
     If Len(colName) = 0 Then Exit Function
-    If Not idx.Exists(colName) Then Exit Function
-    CellOf = data(r, idx(colName))
+    If idx.Exists(colName) Then IdxOf = CLng(idx(colName))
+End Function
+
+' 配列の安全な取り出し（列番号0なら Empty）
+Private Function ValAt(ByVal data As Variant, ByVal r As Long, ByVal c As Long) As Variant
+    If c > 0 Then ValAt = data(r, c)
+End Function
+
+' 絞り込み値をあらかじめ正規化しておく
+Private Function NormPatterns(ByVal vals As String) As Variant
+    Dim list() As String, i As Long
+    If Len(vals) = 0 Then
+        NormPatterns = Split("", ",")
+        Exit Function
+    End If
+    list = Split(vals, ",")
+    For i = LBound(list) To UBound(list)
+        list(i) = NormText(list(i))
+    Next i
+    NormPatterns = list
+End Function
+
+' 正規化済みパターンとの一致判定（末尾 * = 前方一致 / 前後 * = 部分一致）
+Private Function MatchPatterns(ByVal rawValue As String, ByVal pats As Variant) As Boolean
+    Dim v As String, i As Long, pat As String
+
+    If Not IsArray(pats) Then Exit Function
+    If UBound(pats) < LBound(pats) Then
+        MatchPatterns = True                ' 条件なし
+        Exit Function
+    End If
+
+    v = NormText(rawValue)
+    For i = LBound(pats) To UBound(pats)
+        pat = CStr(pats(i))
+        If Len(pat) > 0 Then
+            If Left$(pat, 1) = "*" And Right$(pat, 1) = "*" And Len(pat) > 2 Then
+                If InStr(1, v, Mid$(pat, 2, Len(pat) - 2), vbTextCompare) > 0 Then MatchPatterns = True: Exit Function
+            ElseIf Right$(pat, 1) = "*" Then
+                If StrComp(Left$(v, Len(pat) - 1), Left$(pat, Len(pat) - 1), vbTextCompare) = 0 Then MatchPatterns = True: Exit Function
+            ElseIf Left$(pat, 1) = "*" Then
+                If StrComp(Right$(v, Len(pat) - 1), Mid$(pat, 2), vbTextCompare) = 0 Then MatchPatterns = True: Exit Function
+            Else
+                If StrComp(v, pat, vbTextCompare) = 0 Then MatchPatterns = True: Exit Function
+            End If
+        End If
+    Next i
 End Function
 
 ' ---- ADO(MSDASQL)で取得 ----
