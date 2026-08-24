@@ -27,7 +27,7 @@ Private Const QUOTE_CLOSE  As String = ""
 Private Const SQL_OVERRIDE As String = ""        ' 自分でSQLを書く場合（日付条件は ? を2つ）
 
 Private Const USE_PARAMETERS        As Boolean = False
-Private Const DATE_FORMAT           As String = "yyyy-mm-dd"
+Private Const DATE_FORMAT           As String = "yyyy/mm/dd"
 Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120

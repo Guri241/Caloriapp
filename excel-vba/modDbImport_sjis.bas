@@ -25,7 +25,7 @@ Private Const QUOTE_CLOSE  As String = ""
 Private Const SQL_OVERRIDE As String = ""        ' ©•ª‚ÅSQL‚ğ‘‚­ê‡i“ú•tğŒ‚Í ? ‚ğ2‚Âj
 
 Private Const USE_PARAMETERS        As Boolean = False
-Private Const DATE_FORMAT           As String = "yyyy-mm-dd"
+Private Const DATE_FORMAT           As String = "yyyy/mm/dd"
 Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120

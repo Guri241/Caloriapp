@@ -82,8 +82,8 @@ Private Const CONN_STR As String = _
 
 | Dr.Sum の日付列 | `DATE_LITERAL_TEMPLATE` | `DATE_FORMAT` | 生成される条件 |
 | --- | --- | --- | --- |
-| 日付型（既定） | `"'<DATE>'"` | `"yyyy-mm-dd"` | `>= '2026-07-01'` |
-| 日付型（スラッシュ） | `"'<DATE>'"` | `"yyyy/mm/dd"` | `>= '2026/07/01'` |
+| 日付型（スラッシュ・既定） | `"'<DATE>'"` | `"yyyy/mm/dd"` | `>= '2026/07/01'` |
+| 日付型（ハイフン） | `"'<DATE>'"` | `"yyyy-mm-dd"` | `>= '2026-07-01'` |
 | 文字列 `YYYYMMDD` | `"'<DATE>'"` | `"yyyymmdd"` | `>= '20260701'` |
 | 数値 `YYYYMMDD` | `"<DATE>"` | `"yyyymmdd"` | `>= 20260701` |
 | ODBCエスケープ | `"{d '<DATE>'}"` | `"yyyy-mm-dd"` | `>= {d '2026-07-01'}` |
