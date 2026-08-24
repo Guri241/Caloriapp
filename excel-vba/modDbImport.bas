@@ -95,6 +95,11 @@ Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)"
 Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
 Private Const SPLIT_PREFIX          As String = "<品種>"
 
+' 検算用 : DumpBlock で取り出す 設備・直・日
+Private Const DUMP_LINE  As String = "8020"    ' シートの設備番号
+Private Const DUMP_SHIFT As String = "昼"      ' シートの区分表記
+Private Const DUMP_DAY   As Long = 1           ' 日
+
 ' 試験用 : 取り込む日数を制限する（0 = 制限なし）
 Private Const MAX_IMPORT_DAYS As Long = 0
 
@@ -378,6 +383,105 @@ Failed:
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     Set rs = Nothing
     On Error GoTo 0
+End Function
+
+'------------------------------------------------------------------
+' 検算 : 1ブロック（設備×直×日）の元データを書き出し、集計候補を並べる
+'   シートの既存値と見比べて、どの列・どの集計が正しいか判断してください
+'------------------------------------------------------------------
+Public Sub DumpBlock()
+    Dim ws As Worksheet, qt As Object, fieldMap As Object
+    Dim dFrom As Date, dumm As Date, dTo As Date
+    Dim sql As String, lineVal As String, shiftVal As String
+    Dim lineMap As Object, shiftMap As Object
+    Dim data As Variant, idx As Object, msg As String
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    Set lineMap = NewDict(): BuildLineMap lineMap
+    Set shiftMap = NewDict(): BuildShiftMap shiftMap
+
+    GetPeriod dFrom, dumm
+    dFrom = DateSerial(Year(dFrom), Month(dFrom), DUMP_DAY)
+    dTo = DateAdd("d", 1, dFrom)
+
+    lineVal = MapLine(lineMap, DUMP_LINE)
+    shiftVal = MapShift(shiftMap, DUMP_SHIFT)
+
+    sql = InlineDates(BuildSql(fieldMap), dFrom, dTo) & _
+          " AND " & Q(FLD_LINE) & " = '" & lineVal & "'"
+    If Len(FLD_SHIFT) > 0 Then
+        sql = sql & " AND " & Q(FLD_SHIFT) & " = '" & shiftVal & "'"
+    End If
+
+    Set ws = NewTempSheet("検算_" & DUMP_LINE & DUMP_SHIFT & DUMP_DAY & "日")
+    Set qt = ws.QueryTables.Add(Connection:="ODBC;" & OdbcConnStr(), Destination:=ws.Range("A1"))
+    qt.BackgroundQuery = False
+    qt.CommandText = sql
+    qt.Refresh
+
+    msg = Format$(dFrom, "yyyy/m/d") & "  " & DUMP_LINE & " " & DUMP_SHIFT & _
+          "  （検索キー: " & lineVal & IIf(Len(shiftVal) > 0, " / " & shiftVal, "") & "）" & vbCrLf & vbCrLf
+
+    If qt.ResultRange.Rows.Count > 1 Then
+        data = qt.ResultRange.Value
+        Set idx = HeaderIndex(data)
+        msg = msg & "行数 : " & (UBound(data, 1) - 1) & vbCrLf & vbCrLf
+        msg = msg & ColStats(data, idx, "WORKING_HOURS")
+        msg = msg & ColStats(data, idx, "KAKO_CNT")
+        msg = msg & ColStats(data, idx, "PRODUCT_CNT")
+        msg = msg & vbCrLf & "品種(" & SPLIT_COLUMN & ") : " & _
+              DistinctCount(data, idx, SPLIT_COLUMN) & " 種類" & vbCrLf
+        msg = msg & vbCrLf & "シートの既存値と見比べて、合う集計方法を ④ に設定してください。"
+    Else
+        msg = msg & "該当データがありません。設備コード・直区分の変換をご確認ください。"
+    End If
+
+    ws.Activate
+    MsgBox msg, vbInformation, "検算"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    MsgBox "エラー " & errNum & " : " & errDesc & vbCrLf & vbCrLf & "SQL:" & vbCrLf & sql, _
+           vbCritical, "検算"
+End Sub
+
+' 1列分の集計候補を並べる
+Private Function ColStats(ByVal data As Variant, ByVal idx As Object, ByVal colName As String) As String
+    Dim c As Long, r As Long, v As Variant
+    Dim total As Double, maxV As Double, n As Long, first As String
+
+    c = IdxOf(idx, colName)
+    If c = 0 Then Exit Function
+
+    For r = LBound(data, 1) + 1 To UBound(data, 1)
+        v = data(r, c)
+        If IsNumeric(v) And Not IsEmpty(v) Then
+            n = n + 1
+            total = total + CDbl(v)
+            If n = 1 Or CDbl(v) > maxV Then maxV = CDbl(v)
+            If n = 1 Then first = CStr(v)
+        End If
+    Next r
+
+    ColStats = colName & " :  合計 " & Format$(total, "#,##0") & _
+               "   最大 " & Format$(maxV, "#,##0") & _
+               "   先頭 " & first & "   (" & n & "件)" & vbCrLf
+End Function
+
+' 列の種類数
+Private Function DistinctCount(ByVal data As Variant, ByVal idx As Object, ByVal colName As String) As Long
+    Dim c As Long, r As Long, d As Object
+    c = IdxOf(idx, colName)
+    If c = 0 Then Exit Function
+    Set d = NewDict()
+    For r = LBound(data, 1) + 1 To UBound(data, 1)
+        d(NzStr(data(r, c))) = 1
+    Next r
+    DistinctCount = d.Count
 End Function
 
 '------------------------------------------------------------------
