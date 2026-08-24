@@ -25,13 +25,13 @@ Private Const QUOTE_CLOSE  As String = ""
 Private Const SQL_OVERRIDE As String = ""        ' 自分でSQLを書く場合（日付条件は ? を2つ）
 
 Private Const USE_PARAMETERS        As Boolean = False
-Private Const DATE_FORMAT           As String = "yyyy-mm-dd"   ' 通らない場合 "yyyy/mm/dd"
+Private Const DATE_FORMAT           As String = "yyyy/mm/dd"   ' 0件になる場合 "yyyy-mm-dd"
 Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120
 
 ' 1か月分が大きすぎてDBがエラーを返す場合に True（1日ずつ取得する）
-Private Const FETCH_BY_DAY   As Boolean = False
+Private Const FETCH_BY_DAY   As Boolean = True
 ' 件数を制限する句。Dr.Sum が対応していれば " LIMIT 100" など（調査用）
 Private Const PROBE_LIMIT    As String = ""
 
