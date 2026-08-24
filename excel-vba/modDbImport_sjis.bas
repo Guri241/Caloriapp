@@ -30,6 +30,10 @@ Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120
 
+' 取得方法 : True = Excelの外部データ機能でODBC直接取得（大量データはこちら）
+'            False = ADO(MSDASQL)で取得
+Private Const USE_QUERYTABLE As Boolean = True
+
 ' 読み取り中に内部エラーが出る場合に True（クライアント側カーソルで一括取得）
 Private Const USE_CLIENT_CURSOR As Boolean = True
 
@@ -89,6 +93,9 @@ Private Const PRODUCT_ROW_SUFFIX    As String = "生産数"
 Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)"
 Private Const AUTO_ADD_PRODUCT_ROWS As Boolean = True
 Private Const SPLIT_PREFIX          As String = "<品種>"
+
+' 取得用の作業シート名（処理後に削除します）
+Private Const TEMP_SHEET_NAME As String = "_DB取得作業"
 
 
 '================== ④ 項目名 → DB列名 ==================
@@ -177,11 +184,11 @@ Public Sub ImportFromDb()
                                         "SCAN_START_ROW / シート指定をご確認ください。"
     End If
 
-    Set cache = FetchData(dFrom, dTo, fieldMap, productMap, splits, recCount)
-
     Application.ScreenUpdating = False
     calcMode = Application.Calculation
     Application.Calculation = xlCalculationManual
+
+    Set cache = FetchData(dFrom, dTo, fieldMap, productMap, splits, recCount)
 
     ' シートに無い品種の行を追加してから、行位置を取り直す
     If SPLIT_ENABLED And AUTO_ADD_PRODUCT_ROWS Then
@@ -210,6 +217,7 @@ ErrHandler:
         On Error Resume Next
         Application.Calculation = xlCalculationAutomatic
         Application.ScreenUpdating = True
+        Application.StatusBar = False
         On Error GoTo 0
     End If
     MsgBox "取り込みに失敗しました。" & vbCrLf & vbCrLf & _
@@ -842,6 +850,163 @@ End Function
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                            ByVal fieldMap As Object, ByVal productMap As Object, _
                            ByVal splits As Object, ByRef recCount As Long) As Object
+    If USE_QUERYTABLE Then
+        Set FetchData = FetchViaQueryTable(dFrom, dTo, fieldMap, productMap, splits, recCount)
+        Exit Function
+    End If
+    Set FetchData = FetchViaAdo(dFrom, dTo, fieldMap, productMap, splits, recCount)
+End Function
+
+' ---- ODBC直接取得（Excelの外部データ機能）----
+'   大量データでも落ちないため既定。作業用シートに取り込んでから集計します
+Private Function FetchViaQueryTable(ByVal dFrom As Date, ByVal dTo As Date, _
+                                    ByVal fieldMap As Object, ByVal productMap As Object, _
+                                    ByVal splits As Object, ByRef recCount As Long) As Object
+    Dim ws As Worksheet, qt As Object
+    Dim cache As Object, specs As Object, idx As Object
+    Dim sql As String, chunkFrom As Date, chunkTo As Date
+    Dim data As Variant
+
+    Set cache = NewDict()
+    Set specs = UniqueSpecs(fieldMap)
+    sql = BuildSql(fieldMap)
+    recCount = 0
+
+    Set ws = NewTempSheet(TEMP_SHEET_NAME)
+
+    On Error GoTo CleanUp
+
+    Set qt = ws.QueryTables.Add(Connection:="ODBC;" & OdbcConnStr(), Destination:=ws.Range("A1"))
+    qt.BackgroundQuery = False
+    qt.AdjustColumnWidth = False
+
+    chunkFrom = dFrom
+    Do While chunkFrom < dTo
+        If FETCH_BY_DAY Then
+            chunkTo = DateAdd("d", 1, chunkFrom)
+        Else
+            chunkTo = dTo
+        End If
+        If chunkTo > dTo Then chunkTo = dTo
+
+        Application.StatusBar = "DBから取得中… " & Format$(chunkFrom, "m/d")
+        qt.CommandText = InlineDates(sql, chunkFrom, chunkTo)
+        qt.Refresh
+
+        If qt.ResultRange.Rows.Count > 1 Then
+            data = qt.ResultRange.Value
+            Set idx = HeaderIndex(data)
+            CollectRows data, idx, specs, productMap, splits, cache, recCount
+        End If
+
+        chunkFrom = chunkTo
+    Loop
+
+CleanUp:
+    Dim errNum As Long, errDesc As String
+    errNum = Err.Number: errDesc = Err.Description
+
+    On Error Resume Next
+    Application.StatusBar = False
+    If Not qt Is Nothing Then qt.Delete
+    Application.DisplayAlerts = False
+    ws.Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+
+    If errNum <> 0 Then
+        Err.Raise errNum, , errDesc & vbCrLf & vbCrLf & _
+                  "SQL: " & InlineDates(sql, chunkFrom, chunkTo)
+    End If
+
+    Set FetchViaQueryTable = cache
+End Function
+
+' 取り込んだ表の1行目（見出し）から 列名→列番号 を作る
+Private Function HeaderIndex(ByVal data As Variant) As Object
+    Dim d As Object, c As Long, nm As String
+    Set d = NewDict()
+    For c = LBound(data, 2) To UBound(data, 2)
+        nm = Trim$(CStr(data(LBound(data, 1), c)))
+        If Len(nm) > 0 Then
+            If Not d.Exists(nm) Then d(nm) = c
+        End If
+    Next c
+    Set HeaderIndex = d
+End Function
+
+' 取り込んだ表を集計してキャッシュに積む
+Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs As Object, _
+                        ByVal productMap As Object, ByVal splits As Object, _
+                        ByVal cache As Object, ByRef recCount As Long)
+    Dim r As Long, k As Variant, spec As String
+    Dim dayNo As Long, lineKey As String, shiftKey As String, keyBase As String
+    Dim val As Variant, filterCol As String
+    Dim prodRaw As String, prodName As String, prodKey As String, blockKey As String
+    Dim prodList As Object
+
+    For r = LBound(data, 1) + 1 To UBound(data, 1)
+        dayNo = ParseDayNumber(CellOf(data, idx, r, FLD_DATE))
+        If dayNo > 0 Then
+            lineKey = NormText(NzStr(CellOf(data, idx, r, FLD_LINE)))
+            If Len(FLD_SHIFT) > 0 Then
+                shiftKey = NormText(NzStr(CellOf(data, idx, r, FLD_SHIFT)))
+            Else
+                shiftKey = ""
+            End If
+            keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
+
+            For Each k In specs.Keys
+                spec = CStr(k)
+                filterCol = SpecPart(spec, 2)
+                If Len(filterCol) = 0 Or SpecMatchesValue(spec, NzStr(CellOf(data, idx, r, filterCol))) Then
+                    If IsCalcColumn(SpecPart(spec, 0)) Then
+                        val = CalcDurationFrom(CellOf(data, idx, r, FLD_START), _
+                                               CellOf(data, idx, r, FLD_END), _
+                                               CellOf(data, idx, r, FLD_BREAK))
+                    Else
+                        val = CellOf(data, idx, r, SpecPart(spec, 0))
+                    End If
+                    If Not IsNull(val) And Not IsEmpty(val) Then
+                        Accumulate cache, keyBase & spec, val, SpecPart(spec, 1)
+                    End If
+                End If
+            Next k
+
+            If SPLIT_ENABLED Then
+                prodRaw = NzStr(CellOf(data, idx, r, SPLIT_COLUMN))
+                If Len(Trim$(prodRaw)) > 0 Then
+                    prodName = MapValue(productMap, prodRaw)
+                    prodKey = NormText(prodName)
+                    val = CellOf(data, idx, r, SPLIT_VALUE_COLUMN)
+                    If Not IsNull(val) And Not IsEmpty(val) Then
+                        Accumulate cache, keyBase & SPLIT_PREFIX & prodKey, val, "SUM"
+                    End If
+
+                    blockKey = lineKey & "|" & shiftKey
+                    If Not splits.Exists(blockKey) Then Set splits(blockKey) = NewDict()
+                    Set prodList = splits(blockKey)
+                    prodList(prodKey) = prodName
+                End If
+            End If
+
+            recCount = recCount + 1
+        End If
+    Next r
+End Sub
+
+' 取り込んだ表から列名で値を取り出す（無い列は Empty）
+Private Function CellOf(ByVal data As Variant, ByVal idx As Object, ByVal r As Long, _
+                        ByVal colName As String) As Variant
+    If Len(colName) = 0 Then Exit Function
+    If Not idx.Exists(colName) Then Exit Function
+    CellOf = data(r, idx(colName))
+End Function
+
+' ---- ADO(MSDASQL)で取得 ----
+Private Function FetchViaAdo(ByVal dFrom As Date, ByVal dTo As Date, _
+                             ByVal fieldMap As Object, ByVal productMap As Object, _
+                             ByVal splits As Object, ByRef recCount As Long) As Object
     Dim cn As Object, rs As Object
     Dim specs As Object, cache As Object
     Dim sql As String, k As Variant, spec As String
@@ -930,7 +1095,7 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
     Loop
 
     cn.Close
-    Set FetchData = cache
+    Set FetchViaAdo = cache
     Exit Function
 
 CleanFail:
@@ -1498,31 +1663,41 @@ Private Function SpecPart(ByVal spec As String, ByVal index As Long) As String
     If index <= UBound(parts) Then SpecPart = parts(index)
 End Function
 
-' 絞り込み条件に合う行か
+' 絞り込み条件に合う行か（レコードセット版）
 Private Function SpecMatches(ByVal spec As String, ByVal rs As Object) As Boolean
-    Dim col As String, vals As String, v As String
+    Dim col As String
+    col = SpecPart(spec, 2)
+    If Len(col) = 0 Then
+        SpecMatches = True
+    Else
+        SpecMatches = SpecMatchesValue(spec, NzStr(rs.Fields(col).Value))
+    End If
+End Function
+
+' 絞り込み条件に合う値か
+Private Function SpecMatchesValue(ByVal spec As String, ByVal rawValue As String) As Boolean
+    Dim vals As String, v As String
     Dim list() As String, i As Long, pat As String
 
-    col = SpecPart(spec, 2)
     vals = SpecPart(spec, 3)
-    If Len(col) = 0 Or Len(vals) = 0 Then
-        SpecMatches = True
+    If Len(SpecPart(spec, 2)) = 0 Or Len(vals) = 0 Then
+        SpecMatchesValue = True
         Exit Function
     End If
 
-    v = NormText(NzStr(rs.Fields(col).Value))
+    v = NormText(rawValue)
     list = Split(vals, ",")
     For i = LBound(list) To UBound(list)
         pat = NormText(list(i))
         If Len(pat) > 0 Then
             If Left$(pat, 1) = "*" And Right$(pat, 1) = "*" And Len(pat) > 2 Then
-                If InStr(1, v, Mid$(pat, 2, Len(pat) - 2), vbTextCompare) > 0 Then SpecMatches = True: Exit Function
+                If InStr(1, v, Mid$(pat, 2, Len(pat) - 2), vbTextCompare) > 0 Then SpecMatchesValue = True: Exit Function
             ElseIf Right$(pat, 1) = "*" Then
-                If StrComp(Left$(v, Len(pat) - 1), Left$(pat, Len(pat) - 1), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+                If StrComp(Left$(v, Len(pat) - 1), Left$(pat, Len(pat) - 1), vbTextCompare) = 0 Then SpecMatchesValue = True: Exit Function
             ElseIf Left$(pat, 1) = "*" Then
-                If StrComp(Right$(v, Len(pat) - 1), Mid$(pat, 2), vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+                If StrComp(Right$(v, Len(pat) - 1), Mid$(pat, 2), vbTextCompare) = 0 Then SpecMatchesValue = True: Exit Function
             Else
-                If StrComp(v, pat, vbTextCompare) = 0 Then SpecMatches = True: Exit Function
+                If StrComp(v, pat, vbTextCompare) = 0 Then SpecMatchesValue = True: Exit Function
             End If
         End If
     Next i
@@ -1610,13 +1785,21 @@ End Function
 
 ' 開始・終了から稼働時間を計算する（求められなければ Null）
 Private Function CalcDuration(ByVal rs As Object) As Variant
+    Dim brkVal As Variant
+    If Len(FLD_BREAK) > 0 Then brkVal = rs.Fields(FLD_BREAK).Value
+    CalcDuration = CalcDurationFrom(rs.Fields(FLD_START).Value, rs.Fields(FLD_END).Value, brkVal)
+End Function
+
+' 開始・終了・休憩の値から稼働時間を計算する
+Private Function CalcDurationFrom(ByVal startVal As Variant, ByVal endVal As Variant, _
+                                  ByVal breakVal As Variant) As Variant
     Dim st As Double, en As Double, mins As Double, brk As Double
     Dim v As Variant
 
-    CalcDuration = Null
+    CalcDurationFrom = Null
 
-    st = ParseTimeMinutes(rs.Fields(FLD_START).Value)
-    en = ParseTimeMinutes(rs.Fields(FLD_END).Value)
+    st = ParseTimeMinutes(startVal)
+    en = ParseTimeMinutes(endVal)
     If st < 0 Or en < 0 Then Exit Function
 
     mins = en - st
@@ -1624,8 +1807,8 @@ Private Function CalcDuration(ByVal rs As Object) As Variant
 
     ' 休憩の差し引き
     If Len(FLD_BREAK) > 0 Then
-        v = rs.Fields(FLD_BREAK).Value
-        If Not IsNull(v) Then
+        v = breakVal
+        If Not IsNull(v) And Not IsEmpty(v) Then
             If IsNumeric(v) Then
                 brk = CDbl(v)
             Else
@@ -1641,9 +1824,9 @@ Private Function CalcDuration(ByVal rs As Object) As Variant
     If mins < 0 Then mins = 0
 
     If UCase$(Trim$(DURATION_UNIT)) = "HOUR" Then
-        CalcDuration = Round(mins / 60, DURATION_DECIMALS)
+        CalcDurationFrom = Round(mins / 60, DURATION_DECIMALS)
     Else
-        CalcDuration = Round(mins, DURATION_DECIMALS)
+        CalcDurationFrom = Round(mins, DURATION_DECIMALS)
     End If
 End Function
 
