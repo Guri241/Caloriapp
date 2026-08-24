@@ -369,6 +369,77 @@ Failed:
 End Function
 
 '------------------------------------------------------------------
+' ODBC直接取得のテスト : ADO(MSDASQL)を通さず Excel の外部データ機能で取得する
+'   1日分を新しいシートに書き出します。ADO でエラーになる環境向けの経路確認用
+'------------------------------------------------------------------
+Public Sub TestQueryTable()
+    Dim ws As Worksheet, qt As Object, fieldMap As Object
+    Dim dFrom As Date, dTo As Date, dummy As Date, sql As String
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    GetPeriod dFrom, dummy
+    dTo = DateAdd("d", 1, dFrom)
+    sql = InlineDates(BuildSql(fieldMap), dFrom, dTo)
+
+    Set ws = NewTempSheet("ODBC取得テスト")
+
+    Set qt = ws.QueryTables.Add(Connection:="ODBC;" & OdbcConnStr(), _
+                                Destination:=ws.Range("A1"))
+    qt.CommandText = sql
+    qt.BackgroundQuery = False
+    qt.AdjustColumnWidth = True
+    qt.Refresh
+
+    ws.Activate
+    MsgBox "取得しました。シート「" & ws.Name & "」をご確認ください。" & vbCrLf & vbCrLf & _
+           "行数 : " & (ws.Cells(ws.Rows.Count, 1).End(xlUp).Row - 1) & vbCrLf & vbCrLf & _
+           "SQL:" & vbCrLf & sql, vbInformation, "ODBC直接取得"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    MsgBox "エラー " & errNum & " : " & errDesc & vbCrLf & vbCrLf & _
+           "接続文字列 : ODBC;" & MaskPassword(OdbcConnStr()) & vbCrLf & vbCrLf & _
+           "SQL:" & vbCrLf & sql, vbCritical, "ODBC直接取得"
+End Sub
+
+' CONN_STR から Provider 指定を外した ODBC 用の接続文字列
+Private Function OdbcConnStr() As String
+    Dim parts() As String, i As Long, t As String, kv As String, p As Long, key As String
+
+    parts = Split(CONN_STR, ";")
+    For i = LBound(parts) To UBound(parts)
+        kv = Trim$(parts(i))
+        p = InStr(kv, "=")
+        key = ""
+        If p > 1 Then key = UCase$(Trim$(Left$(kv, p - 1)))
+        If Len(kv) > 0 And key <> "PROVIDER" Then
+            If Len(t) > 0 Then t = t & ";"
+            t = t & kv
+        End If
+    Next i
+    OdbcConnStr = t
+End Function
+
+' 作業用シートを作る（同名があれば消してから）
+Private Function NewTempSheet(ByVal sheetName As String) As Worksheet
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    ThisWorkbook.Worksheets(sheetName).Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+
+    Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    ws.Name = sheetName
+    Set NewTempSheet = ws
+End Function
+
+'------------------------------------------------------------------
 ' 列ごとの取得テスト : どの列で内部エラーになるかを特定する
 '   シートの年月の 1日分 を、列を1つずつ取得して確認します
 '------------------------------------------------------------------
