@@ -115,7 +115,7 @@ Private Const TEMP_SHEET_NAME As String = "_DB取得作業"
 '     絞り込み値 : カンマ区切り。末尾 * で前方一致、前後 * で部分一致
 Private Sub BuildFieldMap(ByVal m As Object)
     AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
-    AddCol m, "良品数(個)", "KAKO_CNT", "SUM", "", ""
+    AddCol m, "良品数(個)", "PRODUCT_CNT", "SUM", "", ""   ' 品種別の生産数の合計と一致
     ' AddCol m, "基準人数(最小人数)", "列名", "MAX", "", ""
 End Sub
 
