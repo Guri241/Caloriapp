@@ -362,7 +362,7 @@ Public Sub TestQuery()
 
     Dim fieldMap As Object, cn As Object, rs As Object
     Dim sql As String, msg As String, body As String, stage As String
-    Dim dFrom As Date, dTo As Date
+    Dim dFrom As Date, dTo As Date, chunkFrom As Date, chunkTo As Date
     Dim n As Long, i As Long
     Dim errNum As Long, errDesc As String
 
@@ -378,10 +378,20 @@ Public Sub TestQuery()
     cn.CommandTimeout = CMD_TIMEOUT
     cn.Open CONN_STR
 
-    stage = "SQLの実行"
-    Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+    chunkFrom = dFrom
+    Do While chunkFrom < dTo
 
-    stage = "データの読み取り"
+    If FETCH_BY_DAY Then
+        chunkTo = DateAdd("d", 1, chunkFrom)
+    Else
+        chunkTo = dTo
+    End If
+    If chunkTo > dTo Then chunkTo = dTo
+
+    stage = "SQLの実行（" & Format$(chunkFrom, "m/d") & "分）"
+    Set rs = ExecuteQuery(cn, sql, chunkFrom, chunkTo)
+
+    stage = "データの読み取り（" & Format$(chunkFrom, "m/d") & "分）"
 
     Do Until rs.EOF
         n = n + 1
@@ -401,12 +411,17 @@ Public Sub TestQuery()
     Loop
 
     rs.Close
+    chunkFrom = chunkTo
+    If n >= MAX_ROWS Then Exit Do
+    Loop
+
     cn.Close
 
     msg = "取得件数 : " & n & " 件"
     If n >= MAX_ROWS Then msg = msg & "（" & MAX_ROWS & " 件で打ち切り）"
     msg = msg & vbCrLf & vbCrLf & body
-    msg = msg & "SQL:" & vbCrLf & EffectiveSql(sql, dFrom, dTo)
+    If FETCH_BY_DAY Then msg = msg & "（1日ずつ " & Format$(dFrom, "m月") & " 分を取得）" & vbCrLf
+    msg = msg & vbCrLf & "SQL:" & vbCrLf & EffectiveSql(sql, dFrom, DateAdd("d", 1, dFrom))
     MsgBox msg, vbInformation, "試し取得"
     Exit Sub
 
@@ -425,7 +440,10 @@ ErrHandler:
                     "　止まった行が特定できます）" & vbCrLf & vbCrLf
     End If
     msg = msg & "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & vbCrLf
-    If Len(sql) > 0 Then msg = msg & "SQL:" & vbCrLf & EffectiveSql(sql, dFrom, dTo)
+    If Len(sql) > 0 Then msg = msg & "SQL:" & vbCrLf & EffectiveSql(sql, chunkFrom, chunkTo)
+    If Not FETCH_BY_DAY Then
+        msg = msg & vbCrLf & vbCrLf & "件数が多すぎる可能性があります。FETCH_BY_DAY = True をお試しください。"
+    End If
     MsgBox msg, vbCritical, "試し取得"
 End Sub
 
