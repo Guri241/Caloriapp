@@ -25,10 +25,15 @@ Private Const QUOTE_CLOSE  As String = ""
 Private Const SQL_OVERRIDE As String = ""        ' 自分でSQLを書く場合（日付条件は ? を2つ）
 
 Private Const USE_PARAMETERS        As Boolean = False
-Private Const DATE_FORMAT           As String = "yyyy/mm/dd"
+Private Const DATE_FORMAT           As String = "yyyy-mm-dd"   ' 通らない場合 "yyyy/mm/dd"
 Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120
+
+' 1か月分が大きすぎてDBがエラーを返す場合に True（1日ずつ取得する）
+Private Const FETCH_BY_DAY   As Boolean = False
+' 件数を制限する句。Dr.Sum が対応していれば " LIMIT 100" など（調査用）
+Private Const PROBE_LIMIT    As String = ""
 
 
 '================== ② DBのキー列名 ==================
@@ -335,180 +340,6 @@ ErrHandler:
            "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & _
            "TABLE_NAME（" & TABLE_NAME & "）が正しいか確認してください。", vbCritical, "列一覧"
 End Sub
-
-'------------------------------------------------------------------
-' データのある月を探す : シートの年月から過去へさかのぼって調べる
-'   全件スキャン(COUNT/DISTINCT)が通らないDB向け。取り込みと同じ形のSQLを使います
-'------------------------------------------------------------------
-Public Sub FindDataMonths()
-    Const MONTHS_BACK As Long = 24      ' さかのぼって調べる月数
-    Const STOP_AFTER  As Long = 6       ' 見つかったら打ち切る件数
-
-    Dim cn As Object, rs As Object, fieldMap As Object
-    Dim sql As String, msg As String, found As Long, k As Long
-    Dim baseFrom As Date, dFrom As Date, dTo As Date
-    Dim dummy As Date
-    Dim errNum As Long, errDesc As String
-
-    On Error GoTo ErrHandler
-
-    Set fieldMap = NewDict(): BuildFieldMap fieldMap
-    GetPeriod baseFrom, dummy
-    sql = "SELECT " & Q(FLD_DATE) & " FROM " & TABLE_NAME & _
-          " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
-
-    Set cn = CreateObject("ADODB.Connection")
-    cn.CommandTimeout = CMD_TIMEOUT
-    cn.Open CONN_STR
-
-    For k = 0 To MONTHS_BACK
-        dFrom = DateAdd("m", -k, baseFrom)
-        dTo = DateAdd("m", 1, dFrom)
-        Application.StatusBar = "データのある月を検索中… " & Format$(dFrom, "yyyy年m月")
-
-        Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
-        If Not rs.EOF Then
-            found = found + 1
-            msg = msg & "  ・" & Format$(dFrom, "yyyy年m月") & _
-                  "   （例: " & NzStr(rs.Fields(0).Value) & "）" & vbCrLf
-        End If
-        rs.Close
-
-        If found >= STOP_AFTER Then Exit For
-    Next k
-
-    cn.Close
-    Application.StatusBar = False
-
-    If found = 0 Then
-        MsgBox Format$(DateAdd("m", -MONTHS_BACK, baseFrom), "yyyy年m月") & " ～ " & _
-               Format$(baseFrom, "yyyy年m月") & " にデータが見つかりませんでした。" & vbCrLf & vbCrLf & _
-               "・日付の書式が合っていない（DATE_FORMAT / DATE_LITERAL_TEMPLATE）" & vbCrLf & _
-               "・対象期間がこれより古い（MONTHS_BACK を増やす）" & vbCrLf & vbCrLf & _
-               "SQL:" & vbCrLf & EffectiveSql(sql, baseFrom, DateAdd("m", 1, baseFrom)), _
-               vbExclamation, "データのある月"
-    Else
-        MsgBox "データのある月:" & vbCrLf & vbCrLf & msg & vbCrLf & _
-               "この年月をシートの " & YEAR_CELL & " / " & MONTH_CELL & " に入れて TestQuery を実行してください。", _
-               vbInformation, "データのある月"
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNum = Err.Number: errDesc = Err.Description
-    On Error Resume Next
-    Application.StatusBar = False
-    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
-    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
-    On Error GoTo 0
-    MsgBox "エラー " & errNum & " : " & errDesc, vbCritical, "データのある月"
-End Sub
-
-'------------------------------------------------------------------
-' データの中身を確認 : 日付の範囲・設備コード・直区分・品種の実際の値
-'   ※ COUNT / DISTINCT を使うため、全件スキャンが通らないDBでは失敗します
-'      その場合は FindDataMonths と TestQuery をお使いください
-'   件数0のときや、変換設定を決めるときに使います
-'------------------------------------------------------------------
-Public Sub ShowDataSummary()
-    Dim cn As Object, msg As String
-    Dim errNum As Long, errDesc As String
-
-    On Error GoTo ErrHandler
-
-    Set cn = CreateObject("ADODB.Connection")
-    cn.CommandTimeout = CMD_TIMEOUT
-    cn.Open CONN_STR
-
-    msg = "テーブル : " & TABLE_NAME & vbCrLf & vbCrLf
-    msg = msg & "■ 全件数" & vbCrLf
-    msg = msg & QueryText(cn, "SELECT COUNT(*) AS CNT FROM " & TABLE_NAME) & vbCrLf
-    msg = msg & vbCrLf & "■ 日付の範囲" & vbCrLf
-    msg = msg & QueryText(cn, "SELECT MIN(" & Q(FLD_DATE) & ") AS D_MIN FROM " & TABLE_NAME) & _
-                "  ～  " & _
-                QueryText(cn, "SELECT MAX(" & Q(FLD_DATE) & ") AS D_MAX FROM " & TABLE_NAME) & vbCrLf
-
-    msg = msg & vbCrLf & "■ " & FLD_LINE & " の値" & vbCrLf
-    msg = msg & DistinctText(cn, FLD_LINE, 30) & vbCrLf
-
-    If Len(FLD_SHIFT) > 0 Then
-        msg = msg & vbCrLf & "■ " & FLD_SHIFT & " の値" & vbCrLf
-        msg = msg & DistinctText(cn, FLD_SHIFT, 10) & vbCrLf
-    End If
-
-    If SPLIT_ENABLED Then
-        msg = msg & vbCrLf & "■ " & SPLIT_COLUMN & " の値（品種）" & vbCrLf
-        msg = msg & DistinctText(cn, SPLIT_COLUMN, 30) & vbCrLf
-    End If
-
-    cn.Close
-    MsgBox msg, vbInformation, "データの概要"
-    Exit Sub
-
-ErrHandler:
-    errNum = Err.Number: errDesc = Err.Description
-    On Error Resume Next
-    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
-    On Error GoTo 0
-    MsgBox "エラー " & errNum & " : " & errDesc, vbCritical, "データの概要"
-End Sub
-
-' 1行だけのSQLを実行して「値 / 値 / 値」の形で返す
-Private Function QueryText(ByVal cn As Object, ByVal sql As String) As String
-    Dim rs As Object, i As Long, t As String
-    On Error GoTo Failed
-    Set rs = cn.Execute(sql)
-    If rs Is Nothing Then
-        QueryText = "(結果が返りませんでした)"
-        Exit Function
-    End If
-    If rs.State = 0 Then
-        QueryText = "(結果が返りませんでした)"
-        Exit Function
-    End If
-    If Not rs.EOF Then
-        For i = 0 To rs.Fields.Count - 1
-            If i > 0 Then t = t & "  /  "
-            t = t & NzStr(rs.Fields(i).Value)
-        Next i
-    End If
-    rs.Close
-    QueryText = t
-    Exit Function
-Failed:
-    QueryText = "(取得できませんでした: " & Err.Description & ")"
-End Function
-
-' 指定列の値を重複なしで取り出す
-Private Function DistinctText(ByVal cn As Object, ByVal colName As String, _
-                              ByVal maxCount As Long) As String
-    Dim rs As Object, t As String, n As Long
-    On Error GoTo Failed
-    Set rs = cn.Execute("SELECT DISTINCT " & Q(colName) & " FROM " & TABLE_NAME)
-    If rs Is Nothing Then
-        DistinctText = "(結果が返りませんでした)"
-        Exit Function
-    End If
-    If rs.State = 0 Then
-        DistinctText = "(結果が返りませんでした)"
-        Exit Function
-    End If
-    Do Until rs.EOF
-        n = n + 1
-        If n <= maxCount Then
-            If Len(t) > 0 Then t = t & ", "
-            t = t & NzStr(rs.Fields(0).Value)
-        End If
-        rs.MoveNext
-    Loop
-    rs.Close
-    If n > maxCount Then t = t & " …ほか " & (n - maxCount) & " 種"
-    If n = 0 Then t = "(データなし)"
-    DistinctText = t
-    Exit Function
-Failed:
-    DistinctText = "(取得できませんでした: " & Err.Description & ")"
-End Function
 
 '------------------------------------------------------------------
 ' 実行されるSQLを確認する
@@ -832,6 +663,7 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
     Dim dayNo As Long
     Dim prodRaw As String, prodName As String, prodKey As String, blockKey As String
     Dim prodList As Object
+    Dim chunkFrom As Date, chunkTo As Date
 
     Set specs = UniqueSpecs(fieldMap)
     Set cache = NewDict()
@@ -845,7 +677,17 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
 
     On Error GoTo CleanFail
 
-    Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+    chunkFrom = dFrom
+    Do While chunkFrom < dTo
+
+    If FETCH_BY_DAY Then
+        chunkTo = DateAdd("d", 1, chunkFrom)
+    Else
+        chunkTo = dTo
+    End If
+    If chunkTo > dTo Then chunkTo = dTo
+
+    Set rs = ExecuteQuery(cn, sql, chunkFrom, chunkTo)
 
     Do Until rs.EOF
         dv = rs.Fields(FLD_DATE).Value
@@ -897,6 +739,9 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
     Loop
 
     rs.Close
+    chunkFrom = chunkTo
+    Loop
+
     cn.Close
     Set FetchData = cache
     Exit Function
@@ -908,7 +753,9 @@ CleanFail:
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
     On Error GoTo 0
-    Err.Raise errNum, , errDesc & vbCrLf & vbCrLf & "SQL: " & EffectiveSql(sql, dFrom, dTo)
+    Err.Raise errNum, , errDesc & vbCrLf & vbCrLf & _
+                        "SQL: " & EffectiveSql(sql, chunkFrom, chunkTo) & vbCrLf & vbCrLf & _
+                        "1か月分が大きすぎる場合は FETCH_BY_DAY = True をお試しください。"
 End Function
 
 ' 集計方法にしたがって値を積み上げる
