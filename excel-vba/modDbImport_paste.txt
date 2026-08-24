@@ -32,6 +32,9 @@ Private Const DATE_LITERAL_TEMPLATE As String = "'<DATE>'"
 Private Const DATE_PARAM_TYPE       As Long = adDate
 Private Const CMD_TIMEOUT           As Long = 120
 
+' 読み取り中に内部エラーが出る場合に True（クライアント側カーソルで一括取得）
+Private Const USE_CLIENT_CURSOR As Boolean = True
+
 ' 1か月分が大きすぎてDBがエラーを返す場合に True（1日ずつ取得する）
 Private Const FETCH_BY_DAY   As Boolean = True
 ' 件数を制限する句。Dr.Sum が対応していれば " LIMIT 100" など（調査用）
@@ -365,6 +368,76 @@ Failed:
     If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
     Set rs = Nothing
     On Error GoTo 0
+End Function
+
+'------------------------------------------------------------------
+' 列ごとの取得テスト : どの列で内部エラーになるかを特定する
+'   シートの年月の 1日分 を、列を1つずつ取得して確認します
+'------------------------------------------------------------------
+Public Sub TestColumns()
+    Dim cn As Object, cols As Object, k As Variant
+    Dim msg As String, dFrom As Date, dTo As Date, dummy As Date
+    Dim fieldMap As Object
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    Set fieldMap = NewDict(): BuildFieldMap fieldMap
+    GetPeriod dFrom, dummy
+    dTo = DateAdd("d", 1, dFrom)
+
+    Set cols = NewDict()
+    cols(FLD_DATE) = 1
+    cols(FLD_LINE) = 1
+    If Len(FLD_SHIFT) > 0 Then cols(FLD_SHIFT) = 1
+    For Each k In CollectColumns(fieldMap).Keys
+        cols(CStr(k)) = 1
+    Next k
+
+    Set cn = CreateObject("ADODB.Connection")
+    cn.CommandTimeout = CMD_TIMEOUT
+    cn.Open CONN_STR
+
+    msg = Format$(dFrom, "yyyy/m/d") & " の1日分を、列ごとに取得した結果:" & vbCrLf & vbCrLf
+    For Each k In cols.Keys
+        msg = msg & ProbeColumn(cn, CStr(k), dFrom, dTo) & vbCrLf
+    Next k
+
+    cn.Close
+    MsgBox msg, vbInformation, "列ごとの取得テスト"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    On Error Resume Next
+    If Not cn Is Nothing Then If cn.State <> 0 Then cn.Close
+    On Error GoTo 0
+    MsgBox "エラー " & errNum & " : " & errDesc, vbCritical, "列ごとの取得テスト"
+End Sub
+
+' 1列だけ取得してみる
+Private Function ProbeColumn(ByVal cn As Object, ByVal colName As String, _
+                             ByVal dFrom As Date, ByVal dTo As Date) As String
+    Dim rs As Object, sql As String, v As String, n As Long
+
+    sql = "SELECT " & Q(colName) & " FROM " & TABLE_NAME & _
+          " WHERE " & Q(FLD_DATE) & " >= ? AND " & Q(FLD_DATE) & " < ?"
+
+    On Error GoTo Failed
+    Set rs = ExecuteQuery(cn, sql, dFrom, dTo)
+    Do Until rs.EOF
+        n = n + 1
+        If n = 1 Then v = NzStr(rs.Fields(0).Value)
+        If n >= 200 Then Exit Do
+        rs.MoveNext
+    Loop
+    rs.Close
+    ProbeColumn = "○ " & colName & "  (" & n & "件, 例: " & v & ")"
+    Exit Function
+Failed:
+    ProbeColumn = "× " & colName & "  → " & Err.Description
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
 End Function
 
 '------------------------------------------------------------------
@@ -858,7 +931,20 @@ End Sub
 ' コマンドを組み立てて実行し、レコードセットを返す
 Private Function ExecuteQuery(ByVal cn As Object, ByVal sql As String, _
                               ByVal dFrom As Date, ByVal dTo As Date) As Object
-    Dim cmd As Object
+    Const adUseClient As Long = 3
+    Const adOpenStatic As Long = 3
+    Const adLockReadOnly As Long = 1
+
+    Dim cmd As Object, rs As Object
+
+    ' クライアント側カーソル : ドライバーのカーソルを使わずADOが一括で受け取る
+    If USE_CLIENT_CURSOR And Not USE_PARAMETERS Then
+        Set rs = CreateObject("ADODB.Recordset")
+        rs.CursorLocation = adUseClient
+        rs.Open InlineDates(sql, dFrom, dTo), cn, adOpenStatic, adLockReadOnly
+        Set ExecuteQuery = rs
+        Exit Function
+    End If
 
     Set cmd = CreateObject("ADODB.Command")
     Set cmd.ActiveConnection = cn
