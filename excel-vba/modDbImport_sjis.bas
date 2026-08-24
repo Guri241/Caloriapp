@@ -69,7 +69,8 @@ Private Const LAST_DATA_COL  As Long = 32       ' AF列 = 31日
 Private Const SCAN_START_ROW As Long = 2
 Private Const SCAN_END_ROW   As Long = 0        ' 0 = A列の最終行まで
 
-Private Const LINE_LIST           As String = "8020,8021,8022"  ' ブロック見出しの設備番号
+Private Const LINE_LIST           As String = _
+    "8020,8021,8022,8023,8024,8025,8026,8788,750B,347D,825B,反力"  ' ブロック見出し（A列の先頭と一致）
 Private Const LINE_DIGITS_MIN     As Long = 3
 Private Const LINE_CODE_PREFIX    As String = "AS"              ' 8020 → AS8020
 Private Const SHIFT_PARTIAL_MATCH As Boolean = True             ' 「ﾃﾚｽｺ昼」→「昼」で判定
@@ -1744,9 +1745,9 @@ Private Function NewDict() As Object
     Set NewDict = CreateObject("Scripting.Dictionary")
 End Function
 
-' 短い書き方（集計は AGGREGATE_MODE、絞り込み無し）
+' 単純な対応表（⑤⑥の値の読み替え用。④で使うと集計LAST・絞り込み無しになる）
 Private Sub AddMap(ByVal m As Object, ByVal sheetLabel As String, ByVal dbName As String)
-    AddCol m, sheetLabel, dbName, AGGREGATE_MODE, "", ""
+    m(NormText(sheetLabel)) = dbName
 End Sub
 
 ' 集計方法・絞り込み付きで登録する
