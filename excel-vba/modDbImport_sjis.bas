@@ -301,7 +301,7 @@ Public Sub ShowColumns()
     Const adLockReadOnly As Long = 1
 
     Dim cn As Object, rs As Object
-    Dim msg As String, i As Long
+    Dim msg As String, i As Long, sqlUsed As String
     Dim errNum As Long, errDesc As String
 
     On Error GoTo ErrHandler
@@ -310,10 +310,17 @@ Public Sub ShowColumns()
     cn.CommandTimeout = CMD_TIMEOUT
     cn.Open CONN_STR
 
-    Set rs = CreateObject("ADODB.Recordset")
-    rs.Open "SELECT * FROM " & TABLE_NAME, cn, adOpenForwardOnly, adLockReadOnly
+    ' 全件取得だとDB側の上限で落ちるため、件数を絞れる書き方から順に試す
+    sqlUsed = TryOpen(cn, rs, "SELECT * FROM " & TABLE_NAME & " LIMIT 10")
+    If Len(sqlUsed) = 0 Then sqlUsed = TryOpen(cn, rs, "SELECT TOP 10 * FROM " & TABLE_NAME)
+    If Len(sqlUsed) = 0 Then sqlUsed = TryOpen(cn, rs, "SELECT * FROM " & TABLE_NAME & " FETCH FIRST 10 ROWS ONLY")
+    If Len(sqlUsed) = 0 Then sqlUsed = TryOpen(cn, rs, "SELECT * FROM " & TABLE_NAME)
+    If Len(sqlUsed) = 0 Then
+        Err.Raise vbObjectError + 40, , "どのSQLでも取得できませんでした。TABLE_NAME をご確認ください。"
+    End If
 
-    msg = "テーブル : " & TABLE_NAME & "（" & rs.Fields.Count & " 列）" & vbCrLf & vbCrLf
+    msg = "テーブル : " & TABLE_NAME & "（" & rs.Fields.Count & " 列）" & vbCrLf
+    msg = msg & "使えたSQL : " & sqlUsed & vbCrLf & vbCrLf
     msg = msg & "列名  =  先頭1件の値" & vbCrLf
     msg = msg & String(40, "-") & vbCrLf
 
@@ -340,6 +347,23 @@ ErrHandler:
            "接続文字列 : " & MaskPassword(CONN_STR) & vbCrLf & _
            "TABLE_NAME（" & TABLE_NAME & "）が正しいか確認してください。", vbCritical, "列一覧"
 End Sub
+
+' レコードセットを開いてみて、成功したらSQLを返す（失敗なら空文字）
+Private Function TryOpen(ByVal cn As Object, ByRef rs As Object, ByVal sql As String) As String
+    Const adOpenForwardOnly As Long = 0
+    Const adLockReadOnly As Long = 1
+
+    On Error GoTo Failed
+    Set rs = CreateObject("ADODB.Recordset")
+    rs.Open sql, cn, adOpenForwardOnly, adLockReadOnly
+    TryOpen = sql
+    Exit Function
+Failed:
+    On Error Resume Next
+    If Not rs Is Nothing Then If rs.State <> 0 Then rs.Close
+    Set rs = Nothing
+    On Error GoTo 0
+End Function
 
 '------------------------------------------------------------------
 ' 実行されるSQLを確認する
@@ -449,13 +473,14 @@ End Sub
 
 ' メッセージ表示用にパスワードを伏せる
 Private Function MaskPassword(ByVal connStr As String) As String
-    Dim parts() As String, i As Long, kv As String, key As String
+    Dim parts() As String, i As Long, kv As String, key As String, p As Long
     parts = Split(connStr, ";")
     For i = LBound(parts) To UBound(parts)
         kv = parts(i)
-        key = UCase$(Trim$(Split(kv, "=")(0)))
-        If key = "PWD" Or key = "PASSWORD" Then
-            If InStr(kv, "=") > 0 Then parts(i) = Left$(kv, InStr(kv, "=")) & "****"
+        p = InStr(kv, "=")
+        If p > 1 Then
+            key = UCase$(Trim$(Left$(kv, p - 1)))
+            If key = "PWD" Or key = "PASSWORD" Then parts(i) = Left$(kv, p) & "****"
         End If
     Next i
     MaskPassword = Join(parts, ";")
