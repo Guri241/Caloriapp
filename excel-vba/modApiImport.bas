@@ -220,6 +220,110 @@ ErrHandler:
 End Sub
 
 '------------------------------------------------------------------
+' 疎通確認 : つながるかどうかだけを、条件を変えて確かめる
+'   ステータスが何であれ「応答が返ってきたか」を並べて表示します
+'------------------------------------------------------------------
+Public Sub CheckApi()
+    Dim msg As String, url As String, host As String
+    Dim dFrom As Date, dumm As Date
+
+    On Error Resume Next
+    GetPeriod dFrom, dumm
+    If dFrom = 0 Then dFrom = Date
+    On Error GoTo 0
+
+    url = ApiUrl(dFrom, DateAdd("d", 1, dFrom))
+    host = HostOf(url)
+
+    msg = "① 指定のURL（今の設定のまま）" & vbCrLf
+    msg = msg & Probe(HTTP_OBJECT, API_METHOD, url) & vbCrLf & vbCrLf
+
+    msg = msg & "② 同じURLを別の通信部品で" & vbCrLf
+    msg = msg & Probe(OtherHttpObject(), API_METHOD, url) & vbCrLf & vbCrLf
+
+    msg = msg & "③ ホストだけ（経路の確認）" & vbCrLf
+    msg = msg & Probe(HTTP_OBJECT, "GET", host) & vbCrLf & vbCrLf
+
+    msg = msg & "④ https で同じURL" & vbCrLf
+    msg = msg & Probe(HTTP_OBJECT, API_METHOD, Replace(url, "http://", "https://", 1, 1)) & vbCrLf & vbCrLf
+
+    msg = msg & "――――――――――――――――――" & vbCrLf
+    msg = msg & "HTTPステータスが返っていれば、そこまでは到達しています。" & vbCrLf
+    msg = msg & "「エラー」と出る場合はサーバーまで届いていません。"
+
+    MsgBox msg, vbInformation, "疎通確認"
+End Sub
+
+' 1回だけ送ってみて、結果を1行で返す
+Private Function Probe(ByVal objName As String, ByVal method As String, ByVal url As String) As String
+    Dim http As Object, t As Single, hs() As String, i As Long, p As Long
+    Dim srv As String
+
+    t = Timer
+    On Error GoTo Failed
+
+    Set http = CreateObject(objName)
+    If Len(API_USER) > 0 Then
+        http.Open method, url, False, API_USER, API_PASS
+    Else
+        http.Open method, url, False
+    End If
+
+    If Len(API_HEADERS) > 0 Then
+        hs = Split(API_HEADERS, "|")
+        For i = LBound(hs) To UBound(hs)
+            p = InStr(hs(i), ":")
+            If p > 1 Then http.setRequestHeader Trim$(Left$(hs(i), p - 1)), Trim$(Mid$(hs(i), p + 1))
+        Next i
+    End If
+
+    http.send
+
+    srv = HeaderValue(http, "Server")
+    Probe = "  → HTTP " & http.Status & " " & http.statusText & _
+            IIf(Len(srv) > 0, "  (" & srv & ")", "") & _
+            "   " & Format$(Timer - t, "0.0") & "秒" & vbCrLf & _
+            "     " & objName & " / " & method & " / " & Left$(url, 70)
+    Exit Function
+
+Failed:
+    Probe = "  → エラー: " & Err.Description & "   " & Format$(Timer - t, "0.0") & "秒" & vbCrLf & _
+            "     " & objName & " / " & method & " / " & Left$(url, 70)
+End Function
+
+' 応答ヘッダーから1つ取り出す
+Private Function HeaderValue(ByVal http As Object, ByVal headerName As String) As String
+    On Error Resume Next
+    HeaderValue = http.getResponseHeader(headerName)
+    On Error GoTo 0
+End Function
+
+' もう一方の通信部品名
+Private Function OtherHttpObject() As String
+    If InStr(1, HTTP_OBJECT, "Server", vbTextCompare) > 0 Then
+        OtherHttpObject = "MSXML2.XMLHTTP"
+    Else
+        OtherHttpObject = "MSXML2.ServerXMLHTTP.6.0"
+    End If
+End Function
+
+' URLから「スキーム://ホスト/」を取り出す
+Private Function HostOf(ByVal url As String) As String
+    Dim p As Long, rest As String, q As Long
+
+    p = InStr(url, "://")
+    If p = 0 Then
+        HostOf = url
+        Exit Function
+    End If
+
+    rest = Mid$(url, p + 3)
+    q = InStr(rest, "/")
+    If q > 0 Then rest = Left$(rest, q - 1)
+    HostOf = Left$(url, p + 2) & rest & "/"
+End Function
+
+'------------------------------------------------------------------
 ' API接続テスト : 1日分を呼び出し、件数と先頭1件の中身を表示する
 '------------------------------------------------------------------
 Public Sub TestApi()
