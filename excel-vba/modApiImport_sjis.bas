@@ -13,8 +13,18 @@ Option Explicit
 ' <FROM> <TO> に対象期間の日付が入ります
 Private Const API_URL     As String = "https://example.co.jp/api/records?from=<FROM>&to=<TO>"
 Private Const API_METHOD  As String = "GET"
-Private Const API_HEADERS As String = ""        ' 複数は | 区切り "Authorization: Bearer xxx|Accept: application/json"
 Private Const API_BODY    As String = ""        ' POST のときの本文
+
+' --- 認証 : 使う方式のところだけ埋めてください ---
+' ① ID・パスワード方式（Basic認証など）
+Private Const API_USER As String = ""
+Private Const API_PASS As String = ""
+' ② トークン／APIキー方式（複数ヘッダーは | 区切り）
+'      "Authorization: Bearer xxxxx"
+'      "X-API-KEY: xxxxx|Accept: application/json"
+Private Const API_HEADERS As String = ""
+' ③ URLにキーを付ける方式は API_URL に直接書いてください
+'      "https://…/api/records?key=xxxxx&from=<FROM>&to=<TO>"
 Private Const API_DATE_FORMAT As String = "yyyy-mm-dd"
 
 ' レコードの配列が入っている場所（最上位が配列なら空のまま）
@@ -1306,7 +1316,11 @@ Private Function HttpText(ByVal url As String) As String
     Dim http As Object, hs() As String, i As Long, p As Long
 
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-    http.Open API_METHOD, url, False
+    If Len(API_USER) > 0 Then
+        http.Open API_METHOD, url, False, API_USER, API_PASS
+    Else
+        http.Open API_METHOD, url, False
+    End If
 
     If Len(API_HEADERS) > 0 Then
         hs = Split(API_HEADERS, "|")
