@@ -24,12 +24,20 @@ Attribute VB_Name = "modDbImport"
 `modDbImport_paste.txt` はこの行を除いた同じ内容です（`.bas` をコピーした場合は、貼り付け後に1行目を削除しても直ります）。
 モジュール名は VBE のプロパティウィンドウ（`F4`）の `(オブジェクト名)` で `modDbImport` に変更できます。
 
+**モジュールは2種類あります。使うのはどちらか一方です。**
+
 | ファイル | 用途 |
 | --- | --- |
-| `modDbImport_sjis.bas` | **ファイル → ファイルのインポート** 用（Shift-JIS） |
-| `modDbImport_paste.txt` | **コピー＆ペースト** 用（Attribute 行なし） |
-| `modDbImport.bas` | GitHub 閲覧用の UTF-8 版（中身は同一） |
+| `modApiImport_paste.txt` | **API(JSON) から取り込む版**（現行）。コピー＆ペースト用 |
+| `modApiImport_sjis.bas` | 同上・**インポート** 用（Shift-JIS） |
+| `modDbImport_paste.txt` | **Dr.Sum(ODBC) から取り込む版**。コピー＆ペースト用 |
+| `modDbImport_sjis.bas` | 同上・**インポート** 用（Shift-JIS） |
+| `*.bas`（UTF-8） | GitHub 閲覧用（中身は同一） |
 | `README.md` | この説明書 |
+
+API 版は接続文字列・SQL・ODBC の設定を一切持ちません。設定は
+① API接続 → ② レコードのキー名 → ③ シートのレイアウト → ④ 項目対応 → ⑤ 値の読み替え → ⑥ 品種の表示名
+の6か所で、④以降の考え方は DB 版と同じです。実行は `TestApi` → `ImportFromApi`。
 
 ## 2. 設定（モジュール冒頭の ①〜⑤ だけ書き換えます）
 
