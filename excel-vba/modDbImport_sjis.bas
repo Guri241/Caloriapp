@@ -107,6 +107,28 @@ Private Const MAX_IMPORT_DAYS As Long = 0
 Private Const TEMP_SHEET_NAME As String = "_DB取得作業"
 
 
+'================== ⑦ API から取得する場合の設定 ==================
+'   ④で列名の先頭に "api:" を付けた項目が、DBではなくAPIから取得されます
+'     例) AddCol m, "基準人数(最小人数)", "api:person_count", "MAX", "", ""
+Private Const USE_API   As Boolean = False
+Private Const API_URL    As String = "https://example.co.jp/api/records?from=<FROM>&to=<TO>"
+Private Const API_METHOD As String = "GET"
+Private Const API_HEADERS As String = ""      ' 複数は | 区切り "Authorization: Bearer xxx|Accept: application/json"
+Private Const API_BODY   As String = ""       ' POST のときの本文
+Private Const API_DATE_FORMAT As String = "yyyy-mm-dd"
+
+' レスポンスの中で、レコードの配列が入っている場所（最上位が配列なら空のまま）
+'   例) {"data":{"items":[ ... ]}} なら "data.items"
+Private Const API_RECORDS_PATH As String = ""
+
+' レコード内のキー名（DBの列名とは別に指定します）
+Private Const API_FLD_DATE  As String = "date"
+Private Const API_FLD_LINE  As String = "line_cd"
+Private Const API_FLD_SHIFT As String = "shift"
+
+Private Const API_PREFIX As String = "api:"   ' 変更不要
+
+
 '================== ④ 項目名 → DB列名 ==================
 '   AddCol m, シートの項目名, DB列名, 集計, 絞り込み列, 絞り込み値
 '     集計 : SUM / MAX / MIN / COUNT / LAST / FIRST
@@ -128,6 +150,15 @@ End Sub
 
 Private Sub BuildLineMap(ByVal m As Object)
     ' AddMap m, "8020", "AS8046"      ' LINE_CODE_PREFIX で足りない場合だけ
+End Sub
+
+' APIの値 → DBと同じ値に揃える（同じ表記なら登録不要）
+Private Sub BuildApiLineMap(ByVal m As Object)
+    ' AddMap m, "8020", "AS8020"
+End Sub
+
+Private Sub BuildApiShiftMap(ByVal m As Object)
+    ' AddMap m, "昼", "1"
 End Sub
 
 
@@ -384,6 +415,58 @@ Failed:
     Set rs = Nothing
     On Error GoTo 0
 End Function
+
+'------------------------------------------------------------------
+' API接続テスト : 1日分を呼び出し、件数と先頭1件の中身を表示する
+'   ⑦の設定を確認するために使います
+'------------------------------------------------------------------
+Public Sub TestApi()
+    Dim recs As Collection, rec As Object, k As Variant
+    Dim dFrom As Date, dumm As Date, dTo As Date
+    Dim url As String, msg As String, i As Long
+    Dim errNum As Long, errDesc As String
+
+    On Error GoTo ErrHandler
+
+    GetPeriod dFrom, dumm
+    dTo = DateAdd("d", 1, dFrom)
+    url = ApiUrl(dFrom, dTo)
+
+    Set recs = ApiRecords(url)
+
+    msg = "URL:" & vbCrLf & url & vbCrLf & vbCrLf
+    msg = msg & "取得件数 : " & recs.Count & " 件" & vbCrLf & vbCrLf
+
+    If recs.Count > 0 Then
+        Set rec = recs(1)
+        msg = msg & "【先頭1件】" & vbCrLf
+        For Each k In rec.Keys
+            i = i + 1
+            If i <= 30 Then
+                msg = msg & "  " & CStr(k) & " = "
+                If IsObject(rec(k)) Then
+                    msg = msg & "(入れ子)"
+                Else
+                    msg = msg & NzStr(rec(k))
+                End If
+                msg = msg & vbCrLf
+            End If
+        Next k
+        msg = msg & vbCrLf & "→ 日 = " & ParseDayNumber(DictVal(rec, API_FLD_DATE)) & _
+              " / 設備 = " & NzStr(DictVal(rec, API_FLD_LINE)) & _
+              " / 直 = " & NzStr(DictVal(rec, API_FLD_SHIFT))
+    Else
+        msg = msg & "レコードが取れていません。API_RECORDS_PATH をご確認ください。"
+    End If
+
+    MsgBox msg, vbInformation, "API接続テスト"
+    Exit Sub
+
+ErrHandler:
+    errNum = Err.Number: errDesc = Err.Description
+    MsgBox "エラー " & errNum & " : " & errDesc & vbCrLf & vbCrLf & "URL:" & vbCrLf & url, _
+           vbCritical, "API接続テスト"
+End Sub
 
 '------------------------------------------------------------------
 ' 検算 : 1ブロック（設備×直×日）の元データを書き出し、集計候補を並べる
@@ -958,11 +1041,60 @@ End Function
 Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
                            ByVal fieldMap As Object, ByVal productMap As Object, _
                            ByVal splits As Object, ByRef recCount As Long) As Object
-    If USE_QUERYTABLE Then
-        Set FetchData = FetchViaQueryTable(dFrom, dTo, fieldMap, productMap, splits, recCount)
+    Dim cache As Object
+
+    If NeedsDb(fieldMap) Then
+        If USE_QUERYTABLE Then
+            Set cache = FetchViaQueryTable(dFrom, dTo, fieldMap, productMap, splits, recCount)
+        Else
+            Set cache = FetchViaAdo(dFrom, dTo, fieldMap, productMap, splits, recCount)
+        End If
+    Else
+        Set cache = NewDict()
+    End If
+
+    If USE_API And UsesApi(fieldMap) Then
+        FetchViaApi dFrom, dTo, fieldMap, cache, recCount
+    End If
+
+    Set FetchData = cache
+End Function
+
+' API由来の列か（④で "api:" を付けたもの）
+Private Function IsApiColumn(ByVal colName As String) As Boolean
+    IsApiColumn = (Len(colName) > Len(API_PREFIX)) And _
+                  (StrComp(Left$(colName, Len(API_PREFIX)), API_PREFIX, vbTextCompare) = 0)
+End Function
+
+Private Function ApiFieldName(ByVal colName As String) As String
+    ApiFieldName = Mid$(colName, Len(API_PREFIX) + 1)
+End Function
+
+' APIから取る項目があるか
+Private Function UsesApi(ByVal fieldMap As Object) As Boolean
+    Dim k As Variant
+    For Each k In fieldMap.Keys
+        If IsApiColumn(SpecPart(CStr(fieldMap(k)), 0)) Then
+            UsesApi = True
+            Exit Function
+        End If
+    Next k
+End Function
+
+' DBから取る必要があるか（品種別集計もDBを使います）
+Private Function NeedsDb(ByVal fieldMap As Object) As Boolean
+    Dim k As Variant, col As String
+    If SPLIT_ENABLED Then
+        NeedsDb = True
         Exit Function
     End If
-    Set FetchData = FetchViaAdo(dFrom, dTo, fieldMap, productMap, splits, recCount)
+    For Each k In fieldMap.Keys
+        col = SpecPart(CStr(fieldMap(k)), 0)
+        If Not IsApiColumn(col) Then
+            NeedsDb = True
+            Exit Function
+        End If
+    Next k
 End Function
 
 ' ---- ODBC直接取得（Excelの外部データ機能）----
@@ -1065,7 +1197,7 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
     Dim iSplit As Long, iSplitVal As Long, iStart As Long, iEnd As Long, iBreak As Long
 
     Dim sSpec() As String, sAgg() As String
-    Dim sCol() As Long, sFilter() As Long, sIsCalc() As Boolean
+    Dim sCol() As Long, sFilter() As Long, sIsCalc() As Boolean, sSkip() As Boolean
     Dim sPats() As Variant, pats As Variant
 
     iDate = IdxOf(idx, FLD_DATE)
@@ -1082,6 +1214,7 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
     n = specs.Count
     ReDim sSpec(1 To n): ReDim sAgg(1 To n)
     ReDim sCol(1 To n): ReDim sFilter(1 To n): ReDim sIsCalc(1 To n): ReDim sPats(1 To n)
+    ReDim sSkip(1 To n)
 
     i = 0
     For Each k In specs.Keys
@@ -1089,11 +1222,12 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
         sSpec(i) = CStr(k)
         sAgg(i) = SpecPart(sSpec(i), 1)
         sIsCalc(i) = IsCalcColumn(SpecPart(sSpec(i), 0))
-        If sIsCalc(i) Then
+        If sIsCalc(i) Or IsApiColumn(SpecPart(sSpec(i), 0)) Then
             sCol(i) = 0
         Else
             sCol(i) = IdxOf(idx, SpecPart(sSpec(i), 0))
         End If
+        sSkip(i) = IsApiColumn(SpecPart(sSpec(i), 0))
         sFilter(i) = IdxOf(idx, SpecPart(sSpec(i), 2))
         sPats(i) = NormPatterns(SpecPart(sSpec(i), 3))
     Next k
@@ -1111,7 +1245,9 @@ Private Sub CollectRows(ByVal data As Variant, ByVal idx As Object, ByVal specs 
             keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
 
             For i = 1 To n
-                If sFilter(i) = 0 Then
+                If sSkip(i) Then
+                    val = 0                                     ' API由来なのでDB側では扱わない
+                ElseIf sFilter(i) = 0 Then
                     val = 1                                     ' 絞り込み無し
                 ElseIf MatchPatterns(NzStr(data(r, sFilter(i))), sPats(i)) Then
                     val = 1
@@ -1207,6 +1343,361 @@ Private Function MatchPatterns(ByVal rawValue As String, ByVal pats As Variant) 
         End If
     Next i
 End Function
+
+' ---- API から取得 ----
+'   ④で "api:" を付けた項目だけを、APIのレスポンスから集計します
+Private Sub FetchViaApi(ByVal dFrom As Date, ByVal dTo As Date, ByVal fieldMap As Object, _
+                        ByVal cache As Object, ByRef recCount As Long)
+    Dim apiLineMap As Object, apiShiftMap As Object, specs As Object
+    Dim recs As Collection, rec As Object
+    Dim k As Variant, spec As String, col As String, filterCol As String
+    Dim chunkFrom As Date, chunkTo As Date
+    Dim dayNo As Long, lineKey As String, shiftKey As String, keyBase As String
+    Dim val As Variant, n As Long
+
+    Set apiLineMap = NewDict(): BuildApiLineMap apiLineMap
+    Set apiShiftMap = NewDict(): BuildApiShiftMap apiShiftMap
+    Set specs = UniqueSpecs(fieldMap)
+
+    chunkFrom = dFrom
+    Do While chunkFrom < dTo
+        If FETCH_BY_DAY Then
+            chunkTo = DateAdd("d", 1, chunkFrom)
+        Else
+            chunkTo = dTo
+        End If
+        If chunkTo > dTo Then chunkTo = dTo
+
+        Application.StatusBar = "APIから取得中… " & Format$(chunkFrom, "m/d")
+        DoEvents
+
+        Set recs = ApiRecords(ApiUrl(chunkFrom, chunkTo))
+
+        For Each rec In recs
+            dayNo = ParseDayNumber(DictVal(rec, API_FLD_DATE))
+            If dayNo > 0 Then
+                lineKey = NormText(MapValue(apiLineMap, NzStr(DictVal(rec, API_FLD_LINE))))
+                If Len(API_FLD_SHIFT) > 0 Then
+                    shiftKey = NormText(MapValue(apiShiftMap, NzStr(DictVal(rec, API_FLD_SHIFT))))
+                Else
+                    shiftKey = ""
+                End If
+                keyBase = lineKey & "|" & shiftKey & "|" & CStr(dayNo) & "|"
+
+                For Each k In specs.Keys
+                    spec = CStr(k)
+                    col = SpecPart(spec, 0)
+                    If IsApiColumn(col) Then
+                        filterCol = SpecPart(spec, 2)
+                        If Len(filterCol) = 0 Then
+                            val = DictVal(rec, ApiFieldName(col))
+                        ElseIf SpecMatchesValue(spec, NzStr(DictVal(rec, filterCol))) Then
+                            val = DictVal(rec, ApiFieldName(col))
+                        Else
+                            val = Null
+                        End If
+                        If Not IsNull(val) And Not IsEmpty(val) Then
+                            Accumulate cache, keyBase & spec, val, SpecPart(spec, 1)
+                        End If
+                    End If
+                Next k
+
+                n = n + 1
+            End If
+        Next rec
+
+        chunkFrom = chunkTo
+    Loop
+
+    Application.StatusBar = False
+    recCount = recCount + n
+End Sub
+
+' 日付を埋め込んだURLを作る
+Private Function ApiUrl(ByVal dFrom As Date, ByVal dTo As Date) As String
+    Dim u As String
+    u = Replace(API_URL, "<FROM>", Format$(dFrom, API_DATE_FORMAT))
+    u = Replace(u, "<TO>", Format$(dTo, API_DATE_FORMAT))
+    ApiUrl = u
+End Function
+
+' APIを呼び、レコードの配列を取り出す
+Private Function ApiRecords(ByVal url As String) As Collection
+    Dim root As Variant, node As Variant, c As Collection, i As Long
+
+    Set c = New Collection
+    root = JsonParse(HttpText(url))
+
+    If IsObject(root) Then
+        node = JsonPath(root, API_RECORDS_PATH)
+    Else
+        Set ApiRecords = c
+        Exit Function
+    End If
+
+    If Not IsObject(node) Then
+        Set ApiRecords = c
+        Exit Function
+    End If
+
+    If TypeName(node) = "Collection" Then
+        For i = 1 To node.Count
+            If IsObject(node(i)) Then c.Add node(i)
+        Next i
+    Else
+        c.Add node                       ' レコードが1件だけの形
+    End If
+
+    Set ApiRecords = c
+End Function
+
+' APIを呼んで本文を返す（UTF-8として読み取り）
+Private Function HttpText(ByVal url As String) As String
+    Dim http As Object, hs() As String, i As Long, p As Long
+
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.Open API_METHOD, url, False
+
+    If Len(API_HEADERS) > 0 Then
+        hs = Split(API_HEADERS, "|")
+        For i = LBound(hs) To UBound(hs)
+            p = InStr(hs(i), ":")
+            If p > 1 Then http.setRequestHeader Trim$(Left$(hs(i), p - 1)), Trim$(Mid$(hs(i), p + 1))
+        Next i
+    End If
+
+    If Len(API_BODY) > 0 Then
+        http.send API_BODY
+    Else
+        http.send
+    End If
+
+    If http.Status < 200 Or http.Status >= 300 Then
+        Err.Raise vbObjectError + 60, , "APIがエラーを返しました。" & vbCrLf & _
+                  "HTTP " & http.Status & " " & http.statusText & vbCrLf & vbCrLf & _
+                  Left$(Utf8Text(http), 500)
+    End If
+
+    HttpText = Utf8Text(http)
+End Function
+
+' 応答本文をUTF-8として文字列化する
+Private Function Utf8Text(ByVal http As Object) As String
+    Dim st As Object
+    On Error GoTo Fallback
+    Set st = CreateObject("ADODB.Stream")
+    st.Type = 1
+    st.Open
+    st.Write http.responseBody
+    st.Position = 0
+    st.Type = 2
+    st.Charset = "utf-8"
+    Utf8Text = st.ReadText
+    st.Close
+    Exit Function
+Fallback:
+    Utf8Text = http.responseText
+End Function
+
+' レコードからキーで値を取り出す（大文字小文字の違いは吸収）
+Private Function DictVal(ByVal rec As Object, ByVal keyName As String) As Variant
+    Dim k As Variant
+    If Len(keyName) = 0 Then Exit Function
+    If rec.Exists(keyName) Then
+        If IsObject(rec(keyName)) Then Exit Function       ' 入れ子はそのままでは扱わない
+        DictVal = rec(keyName)
+        Exit Function
+    End If
+    For Each k In rec.Keys
+        If StrComp(CStr(k), keyName, vbTextCompare) = 0 Then
+            If Not IsObject(rec(k)) Then DictVal = rec(k)
+            Exit Function
+        End If
+    Next k
+End Function
+
+
+'==================== JSON 解析 ====================
+
+Private Function JsonParse(ByVal text As String) As Variant
+    Dim p As Long, out As Variant
+    p = 1
+    JsonValueInto text, p, out
+    If IsObject(out) Then Set JsonParse = out Else JsonParse = out
+End Function
+
+' "data.items" のような場所をたどる（空なら root をそのまま）
+Private Function JsonPath(ByVal root As Variant, ByVal path As String) As Variant
+    Dim parts() As String, i As Long, node As Variant
+
+    If IsObject(root) Then Set node = root Else node = root
+    If Len(Trim$(path)) = 0 Then
+        If IsObject(node) Then Set JsonPath = node Else JsonPath = node
+        Exit Function
+    End If
+
+    parts = Split(path, ".")
+    For i = LBound(parts) To UBound(parts)
+        If Not IsObject(node) Then Exit Function
+        If TypeName(node) <> "Dictionary" Then Exit Function
+        If Not node.Exists(parts(i)) Then Exit Function
+        If IsObject(node(parts(i))) Then
+            Set node = node(parts(i))
+        Else
+            node = node(parts(i))
+        End If
+    Next i
+
+    If IsObject(node) Then Set JsonPath = node Else JsonPath = node
+End Function
+
+Private Sub JsonValueInto(ByRef s As String, ByRef p As Long, ByRef out As Variant)
+    Dim ch As String
+    JsonSkipWs s, p
+    ch = Mid$(s, p, 1)
+    Select Case ch
+        Case "{": Set out = JsonObject(s, p)
+        Case "[": Set out = JsonArray(s, p)
+        Case """": out = JsonString(s, p)
+        Case Else: out = JsonLiteral(s, p)
+    End Select
+End Sub
+
+Private Function JsonObject(ByRef s As String, ByRef p As Long) As Object
+    Dim d As Object, keyName As String, v As Variant
+
+    Set d = NewDict()
+    p = p + 1                                   ' {
+    JsonSkipWs s, p
+    If Mid$(s, p, 1) = "}" Then
+        p = p + 1
+        Set JsonObject = d
+        Exit Function
+    End If
+
+    Do
+        JsonSkipWs s, p
+        keyName = JsonString(s, p)
+        JsonSkipWs s, p
+        If Mid$(s, p, 1) <> ":" Then Err.Raise vbObjectError + 61, , "JSON: ':' がありません（位置 " & p & "）"
+        p = p + 1
+
+        JsonValueInto s, p, v
+        If IsObject(v) Then Set d(keyName) = v Else d(keyName) = v
+
+        JsonSkipWs s, p
+        If Mid$(s, p, 1) = "," Then
+            p = p + 1
+        ElseIf Mid$(s, p, 1) = "}" Then
+            p = p + 1
+            Exit Do
+        Else
+            Err.Raise vbObjectError + 62, , "JSON: ',' か '}' がありません（位置 " & p & "）"
+        End If
+    Loop
+
+    Set JsonObject = d
+End Function
+
+Private Function JsonArray(ByRef s As String, ByRef p As Long) As Collection
+    Dim c As Collection, v As Variant
+
+    Set c = New Collection
+    p = p + 1                                   ' [
+    JsonSkipWs s, p
+    If Mid$(s, p, 1) = "]" Then
+        p = p + 1
+        Set JsonArray = c
+        Exit Function
+    End If
+
+    Do
+        JsonValueInto s, p, v
+        If IsObject(v) Then c.Add v Else c.Add v
+
+        JsonSkipWs s, p
+        If Mid$(s, p, 1) = "," Then
+            p = p + 1
+        ElseIf Mid$(s, p, 1) = "]" Then
+            p = p + 1
+            Exit Do
+        Else
+            Err.Raise vbObjectError + 63, , "JSON: ',' か ']' がありません（位置 " & p & "）"
+        End If
+    Loop
+
+    Set JsonArray = c
+End Function
+
+Private Function JsonString(ByRef s As String, ByRef p As Long) As String
+    Dim sb As String, ch As String, code As String
+
+    If Mid$(s, p, 1) <> """" Then Err.Raise vbObjectError + 64, , "JSON: 文字列ではありません（位置 " & p & "）"
+    p = p + 1
+
+    Do While p <= Len(s)
+        ch = Mid$(s, p, 1)
+        If ch = """" Then
+            p = p + 1
+            JsonString = sb
+            Exit Function
+        ElseIf ch = "\" Then
+            p = p + 1
+            ch = Mid$(s, p, 1)
+            Select Case ch
+                Case "n": sb = sb & vbLf
+                Case "r": sb = sb & vbCr
+                Case "t": sb = sb & vbTab
+                Case "b": sb = sb & Chr$(8)
+                Case "f": sb = sb & Chr$(12)
+                Case "u"
+                    code = Mid$(s, p + 1, 4)
+                    sb = sb & ChrW$(CLng("&H" & code))
+                    p = p + 4
+                Case Else: sb = sb & ch
+            End Select
+            p = p + 1
+        Else
+            sb = sb & ch
+            p = p + 1
+        End If
+    Loop
+
+    Err.Raise vbObjectError + 65, , "JSON: 文字列が閉じていません"
+End Function
+
+Private Function JsonLiteral(ByRef s As String, ByRef p As Long) As Variant
+    Dim st As Long, t As String
+
+    st = p
+    Do While p <= Len(s)
+        If InStr(",]} " & vbTab & vbCr & vbLf, Mid$(s, p, 1)) > 0 Then Exit Do
+        p = p + 1
+    Loop
+    t = Trim$(Mid$(s, st, p - st))
+
+    Select Case LCase$(t)
+        Case "true": JsonLiteral = True
+        Case "false": JsonLiteral = False
+        Case "null": JsonLiteral = Null
+        Case Else
+            If IsNumeric(t) Then
+                JsonLiteral = CDbl(t)
+            Else
+                JsonLiteral = t
+            End If
+    End Select
+End Function
+
+Private Sub JsonSkipWs(ByRef s As String, ByRef p As Long)
+    Do While p <= Len(s)
+        Select Case Mid$(s, p, 1)
+            Case " ", vbTab, vbCr, vbLf: p = p + 1
+            Case Else: Exit Do
+        End Select
+    Loop
+End Sub
+
 
 ' ---- ADO(MSDASQL)で取得 ----
 Private Function FetchViaAdo(ByVal dFrom As Date, ByVal dTo As Date, _
@@ -1497,7 +1988,7 @@ Private Function CollectColumns(ByVal fieldMap As Object) As Object
     Set cols = NewDict()
     For Each k In fieldMap.Keys
         spec = CStr(fieldMap(k))
-        If Not IsCalcColumn(SpecPart(spec, 0)) Then
+        If Not IsCalcColumn(SpecPart(spec, 0)) And Not IsApiColumn(SpecPart(spec, 0)) Then
             If Len(SpecPart(spec, 0)) > 0 Then cols(SpecPart(spec, 0)) = 1
         End If
         If Len(SpecPart(spec, 2)) > 0 Then cols(SpecPart(spec, 2)) = 1
