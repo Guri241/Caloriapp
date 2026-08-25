@@ -88,7 +88,7 @@ Private Const AGGREGATE_MODE          As String = "LAST"
 
 ' 品種別の生産数（「〇〇生産数」の行。無い品種は行を自動追加）
 Private Const SPLIT_ENABLED         As Boolean = True
-Private Const SPLIT_COLUMN          As String = "SEBAN"
+Private Const SPLIT_COLUMN          As String = "SEBAN"       ' APIのときはAPIのキー名
 Private Const SPLIT_VALUE_COLUMN    As String = "PRODUCT_CNT"
 Private Const PRODUCT_ROW_SUFFIX    As String = "生産数"
 Private Const PRODUCT_ROW_ANCHOR    As String = "良品数(個)"
@@ -110,7 +110,13 @@ Private Const TEMP_SHEET_NAME As String = "_DB取得作業"
 '================== ⑦ API から取得する場合の設定 ==================
 '   ④で列名の先頭に "api:" を付けた項目が、DBではなくAPIから取得されます
 '     例) AddCol m, "基準人数(最小人数)", "api:person_count", "MAX", "", ""
-Private Const USE_API   As Boolean = False
+'   USE_API = True  : ④の項目をAPIから取得（Dr.Sumへは接続しません）
+'            False : Dr.Sum から取得
+Private Const USE_API   As Boolean = True
+
+' 品種別の生産数もAPIから作る（APIのみ運用なら True）
+'   SPLIT_COLUMN / SPLIT_VALUE_COLUMN は API のキー名として扱われます
+Private Const SPLIT_FROM_API As Boolean = True
 Private Const API_URL    As String = "https://example.co.jp/api/records?from=<FROM>&to=<TO>"
 Private Const API_METHOD As String = "GET"
 Private Const API_HEADERS As String = ""      ' 複数は | 区切り "Authorization: Bearer xxx|Accept: application/json"
@@ -134,9 +140,15 @@ Private Const API_PREFIX As String = "api:"   ' 変更不要
 '     集計 : SUM / MAX / MIN / COUNT / LAST / FIRST
 '     絞り込み値 : カンマ区切り。末尾 * で前方一致、前後 * で部分一致
 Private Sub BuildFieldMap(ByVal m As Object)
-    AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
-    AddCol m, "良品数(個)", "PRODUCT_CNT", "SUM", "", ""   ' 品種別の生産数の合計と一致
-    ' AddCol m, "基準人数(最小人数)", "列名", "MAX", "", ""
+    If USE_API Then
+        ' ▼ API のキー名に置き換えてください（TestApi の表示どおりに）
+        AddCol m, "稼働時間", "api:working_minutes", "MAX", "", ""
+        AddCol m, "良品数(個)", "api:product_count", "SUM", "", ""
+        AddCol m, "基準人数(最小人数)", "api:person_count", "MAX", "", ""
+    Else
+        AddCol m, "稼働時間", "WORKING_HOURS", "MAX", "", ""
+        AddCol m, "良品数(個)", "PRODUCT_CNT", "SUM", "", ""
+    End If
 End Sub
 
 
@@ -1054,7 +1066,7 @@ Private Function FetchData(ByVal dFrom As Date, ByVal dTo As Date, _
     End If
 
     If USE_API And UsesApi(fieldMap) Then
-        FetchViaApi dFrom, dTo, fieldMap, cache, recCount
+        FetchViaApi dFrom, dTo, fieldMap, productMap, splits, cache, recCount
     End If
 
     Set FetchData = cache
@@ -1084,7 +1096,10 @@ End Function
 ' DBから取る必要があるか（品種別集計もDBを使います）
 Private Function NeedsDb(ByVal fieldMap As Object) As Boolean
     Dim k As Variant, col As String
-    If SPLIT_ENABLED Then
+
+    If USE_API And SPLIT_FROM_API Then
+        ' 品種別もAPIから作るので、DBが要るのは api: 以外の項目がある場合だけ
+    ElseIf SPLIT_ENABLED Then
         NeedsDb = True
         Exit Function
     End If
@@ -1347,6 +1362,7 @@ End Function
 ' ---- API から取得 ----
 '   ④で "api:" を付けた項目だけを、APIのレスポンスから集計します
 Private Sub FetchViaApi(ByVal dFrom As Date, ByVal dTo As Date, ByVal fieldMap As Object, _
+                        ByVal productMap As Object, ByVal splits As Object, _
                         ByVal cache As Object, ByRef recCount As Long)
     Dim apiLineMap As Object, apiShiftMap As Object, specs As Object
     Dim recs As Collection, rec As Object
@@ -1354,6 +1370,8 @@ Private Sub FetchViaApi(ByVal dFrom As Date, ByVal dTo As Date, ByVal fieldMap A
     Dim chunkFrom As Date, chunkTo As Date
     Dim dayNo As Long, lineKey As String, shiftKey As String, keyBase As String
     Dim val As Variant, n As Long
+    Dim prodRaw As String, prodName As String, prodKey As String, blockKey As String
+    Dim prodList As Object
 
     Set apiLineMap = NewDict(): BuildApiLineMap apiLineMap
     Set apiShiftMap = NewDict(): BuildApiShiftMap apiShiftMap
@@ -1401,6 +1419,23 @@ Private Sub FetchViaApi(ByVal dFrom As Date, ByVal dTo As Date, ByVal fieldMap A
                         End If
                     End If
                 Next k
+
+                If SPLIT_ENABLED And SPLIT_FROM_API Then
+                    prodRaw = NzStr(DictVal(rec, SPLIT_COLUMN))
+                    If Len(Trim$(prodRaw)) > 0 Then
+                        prodName = MapValue(productMap, prodRaw)
+                        prodKey = NormText(prodName)
+                        val = DictVal(rec, SPLIT_VALUE_COLUMN)
+                        If Not IsNull(val) And Not IsEmpty(val) Then
+                            Accumulate cache, keyBase & SPLIT_PREFIX & prodKey, val, "SUM"
+                        End If
+
+                        blockKey = lineKey & "|" & shiftKey
+                        If Not splits.Exists(blockKey) Then Set splits(blockKey) = NewDict()
+                        Set prodList = splits(blockKey)
+                        If Not prodList.Exists(prodKey) Then prodList(prodKey) = prodName
+                    End If
+                End If
 
                 n = n + 1
             End If
