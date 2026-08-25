@@ -13,6 +13,11 @@ Option Explicit
 ' <FROM> <TO> に対象期間の日付が入ります
 Private Const API_URL     As String = "https://example.co.jp/api/records?from=<FROM>&to=<TO>"
 Private Const API_METHOD  As String = "GET"
+
+' 通信に使う部品
+'   "MSXML2.XMLHTTP"          : ブラウザ(IE/Edge)と同じプロキシ設定を使う ← 社内APIはこちら
+'   "MSXML2.ServerXMLHTTP.6.0": WinHTTPの設定を使う（プロキシ設定が別）
+Private Const HTTP_OBJECT As String = "MSXML2.XMLHTTP"
 Private Const API_BODY    As String = ""        ' POST のときの本文
 
 ' --- 認証 : 使う方式のところだけ埋めてください ---
@@ -1315,7 +1320,7 @@ End Function
 Private Function HttpText(ByVal url As String) As String
     Dim http As Object, hs() As String, i As Long, p As Long
 
-    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    Set http = CreateObject(HTTP_OBJECT)
     If Len(API_USER) > 0 Then
         http.Open API_METHOD, url, False, API_USER, API_PASS
     Else
@@ -1339,10 +1344,18 @@ Private Function HttpText(ByVal url As String) As String
     If http.Status < 200 Or http.Status >= 300 Then
         Err.Raise vbObjectError + 60, , "APIがエラーを返しました。" & vbCrLf & _
                   "HTTP " & http.Status & " " & http.statusText & vbCrLf & vbCrLf & _
-                  Left$(Utf8Text(http), 500)
+                  "応答ヘッダー:" & vbCrLf & Left$(HeadersOf(http), 400) & vbCrLf & vbCrLf & _
+                  "応答本文:" & vbCrLf & Left$(Utf8Text(http), 400)
     End If
 
     HttpText = Utf8Text(http)
+End Function
+
+' 応答ヘッダーを取り出す（取れない場合は空）
+Private Function HeadersOf(ByVal http As Object) As String
+    On Error Resume Next
+    HeadersOf = http.getAllResponseHeaders
+    On Error GoTo 0
 End Function
 
 ' 応答本文をUTF-8として文字列化する
