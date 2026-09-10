@@ -5,9 +5,32 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { colors, spacing } from "@/theme";
 import { API_URL } from "@/api/client";
+import { openBillingPortal, openCheckout, useSubscription } from "@/api/subscription";
+
+function formatQuota(quota: { used: number; limit: number | null }): string {
+  return quota.limit === null ? `${quota.used}回（無制限）` : `${quota.used} / ${quota.limit}回`;
+}
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
+  const subscription = useSubscription();
+  const plan = subscription.data;
+
+  const handleUpgrade = async () => {
+    try {
+      await openCheckout();
+    } catch {
+      Alert.alert("エラー", "決済ページを開けませんでした");
+    }
+  };
+
+  const handleManage = async () => {
+    try {
+      await openBillingPortal();
+    } catch (error) {
+      Alert.alert("エラー", error instanceof Error ? error.message : "請求ページを開けませんでした");
+    }
+  };
 
   const handleLogout = () => {
     Alert.alert("ログアウト", "ログアウトしますか？", [
@@ -38,6 +61,46 @@ export default function SettingsScreen() {
       </Card>
 
       <Card style={styles.card}>
+        <Text style={styles.cardTitle}>プラン</Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>現在のプラン</Text>
+          <Text style={styles.value}>{plan?.tier === "PRO" ? "Pro" : "Free"}</Text>
+        </View>
+        {plan ? (
+          <>
+            <View style={styles.row}>
+              <Text style={styles.label}>今月のAI写真解析</Text>
+              <Text style={styles.value}>{formatQuota(plan.usage.aiPhotoAnalysis)}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>今月の食品検索</Text>
+              <Text style={styles.value}>{formatQuota(plan.usage.foodSearch)}</Text>
+            </View>
+            {plan.isPro ? (
+              <>
+                <Text style={styles.hint}>
+                  {plan.cancelAtPeriodEnd
+                    ? `${new Date(plan.currentPeriodEnd ?? "").toLocaleDateString("ja-JP")}に解約予定です。それまではProのまま使えます。`
+                    : plan.status === "TRIALING"
+                      ? `無料トライアル中（${new Date(plan.trialEndsAt ?? "").toLocaleDateString("ja-JP")}まで）`
+                      : `次回更新日：${new Date(plan.currentPeriodEnd ?? "").toLocaleDateString("ja-JP")}`}
+                </Text>
+                <Button title="支払い方法・解約の管理" onPress={handleManage} variant="secondary" />
+              </>
+            ) : (
+              <>
+                <Text style={styles.hint}>
+                  年額{plan.pricing.year.amountJpy.toLocaleString("ja-JP")}円（月あたり
+                  {plan.pricing.year.monthlyEquivalentJpy}円）でAI解析と全履歴が解放されます。
+                </Text>
+                <Button title="Proにアップグレード" onPress={handleUpgrade} />
+              </>
+            )}
+          </>
+        ) : null}
+      </Card>
+
+      <Card style={styles.card}>
         <Text style={styles.cardTitle}>接続先API</Text>
         <Text style={styles.apiUrl}>{API_URL}</Text>
         <Text style={styles.hint}>
@@ -48,7 +111,9 @@ export default function SettingsScreen() {
       <Card style={styles.card}>
         <Text style={styles.cardTitle}>ヘルスケア連携</Text>
         <Text style={styles.hint}>
-          HealthKit / Google Fit連携は今後のアップデートで追加予定です。
+          {plan?.limits.healthSync
+            ? "HealthKit / Google Fitからの同期に対応しています（アプリ側の実装は今後追加予定）。"
+            : "HealthKit / Google Fit連携はProプランの機能です。"}
         </Text>
       </Card>
 

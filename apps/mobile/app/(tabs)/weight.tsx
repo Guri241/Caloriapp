@@ -7,6 +7,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { router } from "expo-router";
 import { useCreateWeightLog, useDeleteWeightLog, useWeightLogs } from "@/api/weight";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -20,6 +21,9 @@ import type { WeightLog } from "@/api/types";
 export default function WeightScreen() {
   const { width } = useWindowDimensions();
   const weightQuery = useWeightLogs();
+  const logs = weightQuery.data?.logs ?? [];
+  // 無料プランでは閲覧できる期間に上限がある（記録自体は残っている）
+  const historyLimitedTo = weightQuery.data?.historyLimitedTo ?? null;
   const createMutation = useCreateWeightLog();
   const deleteMutation = useDeleteWeightLog();
 
@@ -57,7 +61,7 @@ export default function WeightScreen() {
     <FlatList
       style={styles.container}
       contentContainerStyle={styles.content}
-      data={weightQuery.data ?? []}
+      data={logs}
       keyExtractor={(item) => item.id}
       onRefresh={() => weightQuery.refetch()}
       refreshing={weightQuery.isRefetching}
@@ -65,7 +69,12 @@ export default function WeightScreen() {
         <View>
           <Card style={styles.card}>
             <Text style={styles.cardTitle}>体重推移</Text>
-            <WeightChart logs={weightQuery.data ?? []} width={width - spacing.md * 4} />
+            <WeightChart logs={logs} width={width - spacing.md * 4} />
+            {historyLimitedTo !== null ? (
+              <Text style={styles.upgradeHint} onPress={() => router.push("/paywall?reason=過去の記録をすべて見るにはProが必要です")}>
+                直近{historyLimitedTo}日分のみ表示中 — すべての履歴を見る
+              </Text>
+            ) : null}
           </Card>
 
           <Card style={styles.card}>
@@ -147,5 +156,11 @@ const styles = StyleSheet.create({
   deleteLink: {
     color: colors.danger,
     fontSize: 13,
+  },
+  upgradeHint: {
+    marginTop: spacing.sm,
+    fontSize: 12.5,
+    color: colors.primary,
+    fontWeight: "600",
   },
 });

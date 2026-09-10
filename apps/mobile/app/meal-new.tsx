@@ -54,7 +54,7 @@ export default function MealNewScreen() {
 
   const results = useMemo(() => {
     const local = localFoods.data ?? [];
-    const usda = usdaFoods.data ?? [];
+    const usda = usdaFoods.data?.foods ?? [];
     const seen = new Set(local.map((f) => f.id));
     return [...local, ...usda.filter((f) => !seen.has(f.id))].slice(0, 20);
   }, [localFoods.data, usdaFoods.data]);

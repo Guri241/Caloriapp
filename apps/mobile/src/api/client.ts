@@ -18,9 +18,21 @@ export async function clearToken(): Promise<void> {
 
 export class ApiClientError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // サーバーが返す機械可読コード。'plan_required' / 'quota_exceeded' で
+  // ペイウォールを出し分けるために使う。
+  code?: string;
+  details?: Record<string, unknown>;
+
+  constructor(status: number, message: string, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+
+  // 402 + コードが返ってきたら課金導線を出すべきエラー
+  get isPaywall(): boolean {
+    return this.status === 402;
   }
 }
 
@@ -44,7 +56,12 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({ error: response.statusText }));
-    throw new ApiClientError(response.status, errorBody.error ?? "Request failed");
+    throw new ApiClientError(
+      response.status,
+      errorBody.error ?? "Request failed",
+      errorBody.code,
+      errorBody,
+    );
   }
 
   if (response.status === 204) return undefined as T;

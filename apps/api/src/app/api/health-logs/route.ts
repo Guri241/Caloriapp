@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { healthLogSchema } from "@/lib/validation";
 import { handleApiError, jsonOk } from "@/lib/api-response";
 import { recalcDailySummary } from "@/lib/daily-summary";
+import { requireProFeature } from "@/lib/entitlements";
 import { z } from "zod";
 
 export async function GET(request: Request) {
@@ -38,6 +39,8 @@ const syncSchema = z.object({ logs: z.array(healthLogSchema).min(1) });
 export async function POST(request: Request) {
   try {
     const { userId } = requireAuth(request);
+    // ヘルスケア連携はPro専用（記録の手間がゼロになる=最も課金理由になる機能）
+    await requireProFeature(userId, "healthSync");
     const { logs } = syncSchema.parse(await request.json());
 
     const results = await Promise.all(

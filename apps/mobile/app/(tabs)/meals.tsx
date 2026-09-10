@@ -59,6 +59,10 @@ export default function MealsScreen() {
           </Card>
         )}
       />
+      {/* 写真記録を主導線にする。手入力より圧倒的に速く、Proの価値が最初に伝わる導線でもある。 */}
+      <Pressable style={styles.fabPhoto} onPress={() => router.push("/meal-photo")}>
+        <Text style={styles.fabPhotoText}>写真で記録</Text>
+      </Pressable>
       <Pressable style={styles.fab} onPress={() => router.push("/meal-new")}>
         <Text style={styles.fabText}>+</Text>
       </Pressable>
@@ -124,6 +128,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
+  },
+  fabPhoto: {
+    position: "absolute",
+    right: spacing.lg,
+    bottom: spacing.lg + 56 + spacing.sm,
+    paddingHorizontal: spacing.md,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primaryDark,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  fabPhotoText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
   },
   fabText: {
     color: "#fff",

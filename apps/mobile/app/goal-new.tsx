@@ -14,7 +14,7 @@ export default function GoalNewScreen() {
 
   const [targetWeightKg, setTargetWeightKg] = useState("");
   const [startWeightKg, setStartWeightKg] = useState(
-    weightQuery.data?.[0]?.weightKg.toString() ?? "",
+    weightQuery.data?.logs[0]?.weightKg.toString() ?? "",
   );
   const [targetDate, setTargetDate] = useState("");
 

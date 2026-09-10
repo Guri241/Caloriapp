@@ -2,10 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type { WeightLog } from "./types";
 
+// 無料プランでは historyLimitedTo に閲覧可能日数が入る（グラフ上の案内に使う）
+export interface WeightLogsResponse {
+  logs: WeightLog[];
+  historyLimitedTo: number | null;
+}
+
 export function useWeightLogs() {
   return useQuery({
     queryKey: ["weight-logs"],
-    queryFn: () => apiFetch<WeightLog[]>("/api/weight-logs?limit=90"),
+    queryFn: () => apiFetch<WeightLogsResponse>("/api/weight-logs?limit=90"),
   });
 }
 

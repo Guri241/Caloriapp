@@ -28,6 +28,14 @@ export default function RootLayout() {
               name="goal-new"
               options={{ headerShown: true, title: "目標を設定", presentation: "modal" }}
             />
+            <Stack.Screen
+              name="meal-photo"
+              options={{ headerShown: true, title: "写真で記録", presentation: "modal" }}
+            />
+            <Stack.Screen
+              name="paywall"
+              options={{ headerShown: true, title: "Caloriapp Pro", presentation: "modal" }}
+            />
           </Stack>
         </SafeAreaProvider>
       </AuthProvider>

@@ -11,12 +11,24 @@ export function useLocalFoods(query: string) {
   });
 }
 
+// 検索回数の残枠。上限に達すると検索自体が402で弾かれる。
+export interface QuotaState {
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+}
+
 // USDA FoodData Centralを検索する（結果はローカルFoodマスタにもキャッシュされる）
 export function useUsdaFoodSearch(query: string) {
   return useQuery({
     queryKey: ["foods", "usda", query],
-    queryFn: () => apiFetch<Food[]>(`/api/foods/search?q=${encodeURIComponent(query)}`),
+    queryFn: () =>
+      apiFetch<{ foods: Food[]; quota: QuotaState }>(
+        `/api/foods/search?q=${encodeURIComponent(query)}`,
+      ),
     enabled: query.length > 1,
+    // 上限超過(402)はリトライしても成功しない
+    retry: false,
   });
 }
 

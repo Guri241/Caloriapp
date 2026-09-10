@@ -60,6 +60,11 @@ model User {
   heightCm      Float? // 身長（BMI計算等に使用）
   activityLevel ActivityLevel @default(MODERATE)
 
+  // 紹介プログラム（広告費0で獲得を回すための成長ループ）
+  referralCode       String? @unique // このユーザーが他人に配るコード
+  referredByCode     String? // 登録時に使われた他人のコード
+  referralCreditDays Int     @default(0) // 紹介で獲得した無料利用日数の累計
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -70,6 +75,10 @@ model User {
   healthLogs     HealthLog[]
   dailySummaries DailySummary[]
   foods          Food[] // ユーザーが自前登録した食品マスタ
+
+  subscription  Subscription?
+  usageCounters UsageCounter[]
+  photoAnalyses MealPhotoAnalysis[]
 
   @@map("users")
 }
@@ -256,4 +265,108 @@ model DailySummary {
 
   @@unique([userId, date])
   @@map("daily_summaries")
+}
+
+// ==========================================
+// 収益化（サブスクリプション）関連
+// ==========================================
+
+// 契約プラン。無料/有料の2階層に絞る（選択肢を増やすと転換率が落ちるため）
+enum PlanTier {
+  FREE
+  PRO
+}
+
+// 課金間隔。年額は月額比で約2ヶ月分の割引を付け、LTVと前払いキャッシュを最大化する
+enum BillingInterval {
+  MONTH
+  YEAR
+}
+
+// Stripeのsubscription.statusに対応させる
+enum SubscriptionStatus {
+  TRIALING // 無料トライアル中
+  ACTIVE // 課金中
+  PAST_DUE // 決済失敗・リトライ中（機能は猶予期間中のみ維持）
+  CANCELED // 解約済み（期末を過ぎた）
+  INCOMPLETE // 初回決済未完了
+}
+
+// 従量制限をかける対象機能
+enum MeteredFeature {
+  AI_PHOTO_ANALYSIS // AI写真解析（原価が乗る唯一の機能）
+  FOOD_SEARCH // USDA食品検索
+}
+
+// ------------------------------------------
+// Subscription: ユーザーの課金状態
+// Stripeを正とし、Webhookでこのテーブルへ射影する
+// ------------------------------------------
+model Subscription {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tier     PlanTier           @default(FREE)
+  status   SubscriptionStatus @default(INCOMPLETE)
+  interval BillingInterval?
+
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  stripePriceId        String?
+
+  currentPeriodEnd  DateTime? // この時刻までは解約後も機能を維持する
+  cancelAtPeriodEnd Boolean   @default(false)
+  trialEndsAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+// ------------------------------------------
+// UsageCounter: 従量機能の月次使用量
+// 無料枠の上限判定と、有料ユーザーの原価監視の両方に使う
+// ------------------------------------------
+model UsageCounter {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  feature     MeteredFeature
+  periodStart DateTime // 集計期間の開始（月初00:00 UTCに正規化）
+  count       Int            @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, feature, periodStart])
+  @@map("usage_counters")
+}
+
+// ------------------------------------------
+// MealPhotoAnalysis: AI写真解析の結果
+// 再解析なしで再利用でき、原価の実測値（inputTokens等）も残す
+// ------------------------------------------
+model MealPhotoAnalysis {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 解析結果（品目配列をJSONで保持。確定するとMealLogItemへ書き出す）
+  items      Json
+  confidence Float? // モデルの自己申告確信度 0.0-1.0
+  note       String? // 「白米の量が推定」など、ユーザーに見せる注記
+
+  model        String? // 解析に使ったモデルID
+  inputTokens  Int? // 原価の実測用
+  outputTokens Int?
+
+  mealLogId String? // 確定してMealLogを作った場合の紐付け
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("meal_photo_analyses")
 }

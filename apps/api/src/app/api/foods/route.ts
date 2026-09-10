@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/auth";
 import { foodSchema } from "@/lib/validation";
-import { handleApiError, jsonOk } from "@/lib/api-response";
+import { ApiError, handleApiError, jsonOk } from "@/lib/api-response";
+import { PAYWALL_CODES, getEntitlement } from "@/lib/entitlements";
 
 // ローカルのFoodマスタ（共通マスタ + 自分の自前登録分）を名前検索する
 export async function GET(request: Request) {
@@ -31,6 +32,19 @@ export async function POST(request: Request) {
   try {
     const { userId } = requireAuth(request);
     const body = foodSchema.parse(await request.json());
+
+    // 自前登録は無料プランに上限を置く。よく食べるものを登録し切れない状態が
+    // そのままアップグレード理由になる。
+    const { limits, tier } = await getEntitlement(userId);
+    if (limits.customFoods !== null) {
+      const registered = await prisma.food.count({ where: { userId } });
+      if (registered >= limits.customFoods) {
+        throw new ApiError(402, "Custom food limit reached for this plan", {
+          code: PAYWALL_CODES.QUOTA_EXCEEDED,
+          details: { feature: "customFoods", limit: limits.customFoods, used: registered, tier },
+        });
+      }
+    }
 
     const food = await prisma.food.create({
       data: {

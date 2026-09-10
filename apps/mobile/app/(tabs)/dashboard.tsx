@@ -31,7 +31,7 @@ export default function DashboardScreen() {
   const exerciseQuery = useExerciseLogs();
 
   const activeGoal = goalsQuery.data?.find((g) => g.isActive);
-  const latestWeight = weightQuery.data?.[0];
+  const latestWeight = weightQuery.data?.logs[0];
   const summary = summaryQuery.data;
   const todayExercises = (exerciseQuery.data ?? []).filter(
     (log) => log.performedAt.slice(0, 10) === today,
